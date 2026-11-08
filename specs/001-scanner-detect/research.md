@@ -146,3 +146,19 @@ checked against the real pieusb option list (R4).
 - **R4, option names**: the fixture starts hand-written from the pieusb option set, and the
   summary heuristics assume standard names. Replace the fixture with a real
   `primefilm capabilities --json` recording once hardware works, and update D8 if names differ.
+  *Status (2026-11-08)*: `src/backend/fixtures/primefilm-xa.json` is **hand-authored** (12
+  options in three groups, values invented to match the XA's published specs) and must be
+  replaced with a real recording (tasks T040, quickstart step 10).
+
+## Implementation notes (2026-11-08)
+
+- SANE's `test` backend leaves its array, button and string test options inactive unless
+  `enable-test-options` is set, so the repo ships `sane.d/test.conf` and `config::prepare`
+  writes it alongside `dll.conf` when `--sane-backend test` is used.
+- The `test` backend reports its `resolution` (a fixed-point option) as `0.000762939`:
+  the raw word is the integer 50, not `SANE_FIX(50)`. `scanimage -A` shows the same value, so
+  this is the test backend's quirk, not a conversion bug in our FFI.
+- A value read returning `SANE_STATUS_UNSUPPORTED` or `SANE_STATUS_INVAL` (e.g. the test
+  backend's hard-select-only bool) is recorded as `value: null` ("unreadable", per
+  data-model.md); any other failing status aborts the read and is diagnosed (busy, access
+  denied, disconnected, or SANE error).

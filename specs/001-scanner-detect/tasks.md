@@ -44,14 +44,14 @@ Single Cargo crate at the repository root: `src/`, `tests/`, `Cargo.toml`.
 **Purpose**: create the Cargo project and enforce the constitution's code rules with the
 compiler.
 
-- [ ] T001 Create `Cargo.toml` at the repo root: `[package] name = "primefilm"`,
+- [X] T001 Create `Cargo.toml` at the repo root: `[package] name = "primefilm"`,
   `edition = "2024"`, `rust-version = "1.99"`, `[lib] path = "src/lib.rs"`,
   `[[bin]] name = "primefilm"`, `path = "src/main.rs"`. Dependencies: `clap = { version = "4",
   features = ["derive"] }`, `serde = { version = "1", features = ["derive"] }`,
   `serde_json = "1"`, `thiserror = "2"`, `ctrlc = "3"`. Add `[lints.clippy] unwrap_used =
   "warn"` and `expect_used = "warn"`, and create `clippy.toml` with `allow-unwrap-in-tests = true`
   and `allow-expect-in-tests = true` (Principle VI).
-- [ ] T002 Create the module skeleton with empty files: `src/lib.rs` declaring `pub mod cli;
+- [X] T002 Create the module skeleton with empty files: `src/lib.rs` declaring `pub mod cli;
   pub mod error; pub mod capability; pub mod report; pub mod usb; pub mod backend;`, plus
   `src/cli.rs`, `src/error.rs`, `src/capability.rs`, `src/report.rs`, `src/usb.rs`,
   `src/backend/mod.rs` (declaring `pub mod fake;` and `pub mod sane;`), `src/backend/fake.rs`,
@@ -59,7 +59,7 @@ compiler.
   `src/backend/sane/ffi.rs`, `src/backend/sane/config.rs`, and a `src/main.rs` with an empty
   `fn main()`. Comment the crate/module/`pub` concepts in `src/lib.rs` (concept 1). Verify with
   `cargo build`.
-- [ ] T003 Enforce "unsafe only in the SANE wrapper": add `#![deny(unsafe_code)]` at the top of
+- [X] T003 Enforce "unsafe only in the SANE wrapper": add `#![deny(unsafe_code)]` at the top of
   `src/lib.rs` and `src/main.rs`, and `#[allow(unsafe_code)]` on the `pub mod sane;` line in
   `src/backend/mod.rs`, with a comment pointing to constitution Principle VI.
 
@@ -72,7 +72,7 @@ story uses.
 
 **⚠️ CRITICAL**: no user story work can begin until this phase is complete.
 
-- [ ] T004 [P] Implement `ScanError` in `src/error.rs` with `thiserror` (concept 4), with
+- [X] T004 [P] Implement `ScanError` in `src/error.rs` with `thiserror` (concept 4), with
   variants exactly as in data-model.md: `NotFound`, `Busy { device: Option<String> }`,
   `PermissionDenied { path: String }`, `DriverUnavailable { reason: String }`,
   `Disconnected { during: String }`, `Interrupted`, `Sane { status: i32, text: String }`. Add
@@ -86,12 +86,12 @@ story uses.
   Messages (`Display`) and next steps must be copied from the outcomes table in
   contracts/cli.md. Add `#[cfg(test)]` unit tests asserting every exit code and outcome string,
   and that all seven exit codes are distinct (SC-003).
-- [ ] T005 [P] Define `DeviceInfo { name: String, vendor: String, model: String, kind: String }`
+- [X] T005 [P] Define `DeviceInfo { name: String, vendor: String, model: String, kind: String }`
   in `src/backend/mod.rs` (derive `Debug, Clone, PartialEq, Serialize, Deserialize`), plus
   `pub trait ScannerBackend { fn list_devices(&mut self) -> Result<Vec<DeviceInfo>, ScanError>; }`
   (concept 6). Document that `name` is "Non-empty; used with `--device`", and that `kind` is
   named that way because `type` is a Rust keyword.
-- [ ] T006 [P] Define the CLI in `src/cli.rs` with clap derive, per contracts/cli.md:
+- [X] T006 [P] Define the CLI in `src/cli.rs` with clap derive, per contracts/cli.md:
   - `Cli` fields: `verbose: u8` (`-v`, `ArgAction::Count`, global), `json: bool` (`--json`,
     global), `simulate: Option<Scenario>` (hidden, global), `sane_backend: Option<String>`
     (hidden, global), `command: Command`.
@@ -101,7 +101,7 @@ story uses.
 
   Add a unit test using `Cli::try_parse_from` for `primefilm -vv --json capabilities --device X`
   and for global flags placed after the subcommand.
-- [ ] T007 [P] Write the raw SANE declarations in `src/backend/sane/ffi.rs` per research.md D2,
+- [X] T007 [P] Write the raw SANE declarations in `src/backend/sane/ffi.rs` per research.md D2,
   mirroring `/usr/include/sane/sane.h`:
   - Type aliases `SaneWord = i32`, `SaneHandle = *mut c_void`.
   - `#[repr(C)]` structs `SaneDevice { name, vendor, model, type_: *const c_char }`,
@@ -116,7 +116,7 @@ story uses.
   Comment FFI, `extern "C"`, `#[repr(C)]` and raw pointers (concept 10), and explain why the
   C union is modeled as one `*const c_void`. Add a unit test asserting the struct sizes match C
   on x86_64 (`size_of::<SaneOptionDescriptor>() == 56`, `SaneRange == 12`, `SaneDevice == 32`).
-- [ ] T008 [P] Implement the SANE config writer in `src/backend/sane/config.rs` per research.md
+- [X] T008 [P] Implement the SANE config writer in `src/backend/sane/config.rs` per research.md
   D3: `pub fn prepare(backend: &str, driver_debug: bool) -> Result<PathBuf, ScanError>`.
   - Choose the directory `$XDG_RUNTIME_DIR/primefilm/sane.d`, falling back to
     `std::env::temp_dir().join("primefilm-sane.d")`, and create it.
@@ -127,7 +127,7 @@ story uses.
     `// SAFETY:` comment stating they run before any other thread exists. Make the function's
     doc comment say it must be called before the Ctrl-C handler is installed.
   - Map I/O failures to `ScanError::Sane { status: -1, text }`.
-- [ ] T009 Implement the run skeleton and output plumbing. Depends on T004–T006.
+- [X] T009 Implement the run skeleton and output plumbing. Depends on T004–T006.
   - `src/report.rs`: `pub struct Logger { level: u8 }` with `fn step(&self, msg: &str)`, which
     prints `primefilm: {msg}` to stderr when `level >= 1` (no custom macros, per Principle VI).
   - `src/report.rs`: `pub fn print_error(err: &ScanError, json: bool)`. It always prints the
@@ -155,7 +155,7 @@ it exits 3 with the power/cable next step. Without hardware: `--simulate ready` 
 
 ### Tests for User Story 1
 
-- [ ] T010 [P] [US1] Create `tests/cli.rs` with a helper `fn primefilm(args: &[&str]) -> (i32,
+- [X] T010 [P] [US1] Create `tests/cli.rs` with a helper `fn primefilm(args: &[&str]) -> (i32,
   String, String)` that runs `env!("CARGO_BIN_EXE_primefilm")` through `std::process::Command`
   and returns exit code, stdout and stderr. Add tests:
   - `--simulate ready detect` → exit 0 and stdout contains `RPS 10M`.
@@ -164,16 +164,16 @@ it exits 3 with the power/cable next step. Without hardware: `--simulate ready` 
     `outcome == "found"`, `devices` has 1 entry with all four fields.
   - `--json --simulate no-scanner detect` → `outcome == "not-found"`, and `message` and
     `next_step` are non-empty.
-- [ ] T011 [P] [US1] Create `tests/sane_test_backend.rs` that runs the binary with
+- [X] T011 [P] [US1] Create `tests/sane_test_backend.rs` that runs the binary with
   `--sane-backend test detect` and asserts exit 0, that every listed device name starts with
   `test:`, and that no `v4l:` device appears (FR-002, acceptance scenario US1-3).
-- [ ] T012 [P] [US1] Create `tests/hardware.rs` with `#[ignore]` test `detect_finds_scanner`:
+- [X] T012 [P] [US1] Create `tests/hardware.rs` with `#[ignore]` test `detect_finds_scanner`:
   run `primefilm detect`, assert exit 0 and stdout contains `pieusb:`. Add a file-level comment:
   "Needs the real PrimeFilm XA. Run with `cargo test -- --ignored`".
 
 ### Implementation for User Story 1
 
-- [ ] T013 [P] [US1] Implement `FakeBackend { scenario: Scenario }` in `src/backend/fake.rs`
+- [X] T013 [P] [US1] Implement `FakeBackend { scenario: Scenario }` in `src/backend/fake.rs`
   with `ScannerBackend::list_devices`:
   - `Ready`, `Disconnect`, `Interrupt` → `Ok(vec![DeviceInfo { name:
     "fake:primefilm-xa", vendor: "Reflecta", model: "RPS 10M", kind: "film scanner" }])`.
@@ -181,7 +181,7 @@ it exits 3 with the power/cable next step. Without hardware: `--simulate ready` 
   - `Busy` → `Err(Busy { device: None })`.
   - `PermissionDenied` → `Err(PermissionDenied { path: "/dev/bus/usb/001/004" })`.
   - `DriverMissing` → `Err(DriverUnavailable { reason: "simulated: driver file missing" })`.
-- [ ] T014 [US1] Implement the safe SANE core in `src/backend/sane/mod.rs`:
+- [X] T014 [US1] Implement the safe SANE core in `src/backend/sane/mod.rs`:
   - `pub struct Sane` with `Sane::init() -> Result<Sane, ScanError>`, guarded by a `static
     INITIALIZED: AtomicBool`; a second init is an error (research D5).
   - `impl Drop for Sane` calling `sane_exit` and clearing the flag (concept 9).
@@ -193,17 +193,17 @@ it exits 3 with the power/cable next step. Without hardware: `--simulate ready` 
     `sane_get_devices(&mut list, 1)` and walking the NULL-terminated array.
 
   Every `unsafe` block gets a `// SAFETY:` comment.
-- [ ] T015 [US1] Implement `pub struct SaneBackend { backend: String }` with
+- [X] T015 [US1] Implement `pub struct SaneBackend { backend: String }` with
   `ScannerBackend::list_devices` in `src/backend/sane/mod.rs`: init SANE, list devices, keep only
   names starting with `"{backend}:"`, and return `Err(ScanError::NotFound)` when the list is
   empty. US3 refines this diagnosis. Depends on T014.
-- [ ] T016 [P] [US1] Add detect rendering in `src/report.rs`:
+- [X] T016 [P] [US1] Add detect rendering in `src/report.rs`:
   - `pub fn print_devices(devices: &[DeviceInfo], json: bool)`.
   - Human output, per contracts/cli.md: `Found N scanner(s):` then
     `  {name}  {vendor} {model} ({kind})`.
   - JSON output: `#[derive(Serialize)] struct DetectReport { schema_version: 1, outcome:
     "found", devices }`.
-- [ ] T017 [US1] Wire `detect` end to end. Depends on T013–T016.
+- [X] T017 [US1] Wire `detect` end to end. Depends on T013–T016.
   - In `src/lib.rs`, add a generic `fn detect<B: ScannerBackend>(backend: &mut B, json: bool,
     log: &Logger)`.
   - In `run`, `match` on `cli.simulate`: `Some(s)` → `FakeBackend`; `None` →
@@ -228,30 +228,30 @@ correctly; with the scanner on, every option matches `./scripts/probe.sh` (SC-00
 
 ### Tests for User Story 2
 
-- [ ] T018 [P] [US2] Add unit tests in `src/capability.rs`:
+- [X] T018 [P] [US2] Add unit tests in `src/capability.rs`:
   - `fixed_to_f64(65536) == 1.0` and `fixed_to_f64(-32768) == -0.5`.
   - `CapabilitySummary::from_options` on a hand-built list (`resolution` word list
     `[1800, 3600, 7200]`, `mode` strings `["Color", "Gray", "RGBI"]`, `depth` `[8, 16]`,
     `br-x` range max 36.0, `br-y` range max 24.0) → those values and `infrared == "available"`.
   - An empty list → all `None` and `infrared == "unknown"`.
   - A list whose modes lack RGBI/infrared → `"not available"`.
-- [ ] T019 [P] [US2] Add tests to `tests/cli.rs`:
+- [X] T019 [P] [US2] Add tests to `tests/cli.rs`:
   - `--simulate ready capabilities` → exit 0, stdout contains `Summary` and `Infrared`.
   - `--json --simulate ready capabilities` → `device`, `summary`, `options` present; every
     option has the 13 keys from data-model.md; at least one option has `"active": false` and
     `"value": null` (US2 scenario 3).
   - `--simulate ready capabilities --device nope` → exit 3.
-- [ ] T020 [P] [US2] Add a test to `tests/sane_test_backend.rs`: `--sane-backend test --json
+- [X] T020 [P] [US2] Add a test to `tests/sane_test_backend.rs`: `--sane-backend test --json
   capabilities` → exit 0, and `options` together contain `value_type`s `int`, `fixed`, `bool`,
   `string`, `button` and `group`. Every `button`/`group` has `value: null`, and at least one
   `int` option's `value` array has more than 1 element (arrays not truncated, research D2).
-- [ ] T021 [P] [US2] Add an `#[ignore]` test `capabilities_lists_options` to
+- [X] T021 [P] [US2] Add an `#[ignore]` test `capabilities_lists_options` to
   `tests/hardware.rs`: `primefilm --json capabilities` → exit 0, `options` non-empty, and
   `summary.resolutions_dpi` not null.
 
 ### Implementation for User Story 2
 
-- [ ] T022 [P] [US2] Implement the capability types in `src/capability.rs` per data-model.md,
+- [X] T022 [P] [US2] Implement the capability types in `src/capability.rs` per data-model.md,
   all deriving `Debug, Clone, PartialEq, Serialize, Deserialize`:
   - `Capability`, with all 13 fields and the field names exactly as in data-model.md.
   - `ValueType` (`#[serde(rename_all = "lowercase")]`) and `Unit` (lowercase), each with a
@@ -261,13 +261,13 @@ correctly; with the scanner on, every option matches `./scripts/probe.sh` (SC-00
   - `Value` (`#[serde(untagged)]`: `Bool(Vec<bool>)`, `Int(Vec<i32>)`, `Fixed(Vec<f64>)`,
     `Text(String)`).
   - `pub fn fixed_to_f64(raw: i32) -> f64` returning `raw as f64 / 65536.0`.
-- [ ] T023 [US2] Implement `CapabilitySummary { resolutions_dpi: Option<Constraint>,
+- [X] T023 [US2] Implement `CapabilitySummary { resolutions_dpi: Option<Constraint>,
   color_modes: Option<Vec<String>>, bit_depths: Option<Vec<i64>>, scan_area_mm:
   Option<ScanArea { width, height }>, infrared: Infrared }` and `CapabilitySummary::from_options
   (&[Capability])` in `src/capability.rs` using iterators and closures (concept 7), following
   research.md D8. `Infrared` serializes as `"available" | "not available" | "unknown"`.
   Depends on T022.
-- [ ] T024 [P] [US2] Hand-author the simulated option list `src/backend/fixtures/primefilm-xa.json`
+- [X] T024 [P] [US2] Hand-author the simulated option list `src/backend/fixtures/primefilm-xa.json`
   (a JSON array of `Capability`):
   - Groups: "Scan Mode", "Geometry", "Advanced".
   - `mode` string list `Color`, `Gray`, `RGBI` (value `"Color"`).
@@ -280,7 +280,7 @@ correctly; with the scanner on, every option matches `./scripts/probe.sh` (SC-00
   Every entry must have all 13 `Capability` fields and no extra keys, because JSON has no
   comments and the file must deserialize as `Vec<Capability>`. Record in research.md R4 that it
   is hand-authored and must be replaced with a real recording.
-- [ ] T025 [US2] Extend the trait in `src/backend/mod.rs` with `fn read_capabilities(&mut self,
+- [X] T025 [US2] Extend the trait in `src/backend/mod.rs` with `fn read_capabilities(&mut self,
   device: &str, cancel: &AtomicBool) -> Result<Vec<Capability>, ScanError>`. Implement it in
   `src/backend/fake.rs`:
   - `Ready`: parse the fixture with `include_str!` + `serde_json::from_str`. `expect` is allowed
@@ -289,7 +289,7 @@ correctly; with the scanner on, every option matches `./scripts/probe.sh` (SC-00
   - `Interrupt` → `Err(Interrupted)`.
   - An unknown device name → `Err(NotFound)`.
   - Other scenarios → the same errors as `list_devices`.
-- [ ] T026 [US2] Implement device access in `src/backend/sane/mod.rs`. Depends on T014, T022.
+- [X] T026 [US2] Implement device access in `src/backend/sane/mod.rs`. Depends on T014, T022.
   - `pub struct Device<'a> { handle: SaneHandle, _sane: &'a Sane }`. Add a comment explaining
     the lifetime and why it's the one justified explicit lifetime (plan Complexity Tracking,
     concept 11).
@@ -310,10 +310,10 @@ correctly; with the scanner on, every option matches `./scripts/probe.sh` (SC-00
        `CStr::from_bytes_until_nul`.
 
     Never call any action except `ACTION_GET_VALUE` (FR-006).
-- [ ] T027 [US2] Implement `SaneBackend::read_capabilities` in `src/backend/sane/mod.rs`: init,
+- [X] T027 [US2] Implement `SaneBackend::read_capabilities` in `src/backend/sane/mod.rs`: init,
   list, check `device` is in the filtered list (otherwise `NotFound`), open, read options.
   Drop order closes the device before `sane_exit` (research D5). Depends on T026.
-- [ ] T028 [P] [US2] Add capabilities rendering in `src/report.rs`:
+- [X] T028 [P] [US2] Add capabilities rendering in `src/report.rs`:
   - `print_capabilities(device: &DeviceInfo, summary: &CapabilitySummary, options:
     &[Capability], json: bool)`.
   - Human output per contracts/cli.md: a header line, a `Summary` block (`unknown` for `None`),
@@ -322,7 +322,7 @@ correctly; with the scanner on, every option matches `./scripts/probe.sh` (SC-00
     choices, and title.
   - JSON: `#[derive(Serialize)] struct CapabilitiesReport { schema_version: 1, outcome:
     "found", device, summary, options }`.
-- [ ] T029 [US2] Wire `capabilities [--device]` in `src/lib.rs`. Depends on T023, T025, T027,
+- [X] T029 [US2] Wire `capabilities [--device]` in `src/lib.rs`. Depends on T023, T025, T027,
   T028.
   - Add a generic `fn capabilities<B: ScannerBackend>(...)`.
   - Choose the device: the `--device` value if given, else the first from `list_devices`. When
@@ -347,7 +347,7 @@ Ctrl-C → 130 and the scanner is free afterwards.
 
 ### Tests for User Story 3
 
-- [ ] T030 [P] [US3] Add unit tests in `src/usb.rs`. Each builds a fake sysfs tree under
+- [X] T030 [P] [US3] Add unit tests in `src/usb.rs`. Each builds a fake sysfs tree under
   `std::env::temp_dir().join(format!("primefilm-usb-test-{}-{name}", std::process::id()))` with
   files `idVendor`, `idProduct`, `busnum`, `devnum`, and removes it at the end. Cases:
   - No matching device → `None`.
@@ -355,7 +355,7 @@ Ctrl-C → 130 and the scanner is free afterwards.
   - An interface dir `1-2:1.0/driver` symlinked (`std::os::unix::fs::symlink`) to a path ending
     in `usbfs` → claimed is `true`.
   - No driver link → `false`.
-- [ ] T031 [P] [US3] Add tests to `tests/cli.rs`:
+- [X] T031 [P] [US3] Add tests to `tests/cli.rs`:
   - `--simulate busy detect` → exit 4 and stderr contains `in use`.
   - `permission-denied` → 5.
   - `driver-missing` → 6.
@@ -368,7 +368,7 @@ Ctrl-C → 130 and the scanner is free afterwards.
 
 ### Implementation for User Story 3
 
-- [ ] T032 [P] [US3] Implement the `/sys` probe in `src/usb.rs` per research.md D4:
+- [X] T032 [P] [US3] Implement the `/sys` probe in `src/usb.rs` per research.md D4:
   - `pub struct UsbProbe { sysfs_root: PathBuf }` with `UsbProbe::system()` (root
     `/sys/bus/usb/devices`) and `UsbProbe::at(path)` for tests.
   - `find(&self, vendor: &str, product: &str) -> Option<UsbDevice { sys_name, bus: u32,
@@ -379,7 +379,7 @@ Ctrl-C → 130 and the scanner is free afterwards.
   - `check_node_access(dev) -> std::io::Result<()>`, which opens the node with
     `OpenOptions::new().read(true).write(true)` and drops it immediately. Comment that this
     does not claim the interface.
-- [ ] T033 [US3] Add diagnosis to `SaneBackend` in `src/backend/sane/mod.rs`, in the order of
+- [X] T033 [US3] Add diagnosis to `SaneBackend` in `src/backend/sane/mod.rs`, in the order of
   contracts/cli.md's outcomes table. Skip all `/sys` checks when the backend is not `pieusb`.
   Depends on T032. Before `Sane::init`:
   1. `libsane-pieusb.so.1` missing from all of `/usr/lib/x86_64-linux-gnu/sane`,
@@ -401,7 +401,7 @@ Ctrl-C → 130 and the scanner is free afterwards.
     options" }`, else `status_error`.
 
   Never retry (Principle II).
-- [ ] T034 [US3] Add verbose steps via `Logger::step` in `src/lib.rs` and
+- [X] T034 [US3] Add verbose steps via `Logger::step` in `src/lib.rs` and
   `src/backend/sane/mod.rs`, matching the examples in contracts/cli.md:
   - The config dir and backend.
   - The USB location and claimed state.
@@ -411,7 +411,7 @@ Ctrl-C → 130 and the scanner is free afterwards.
   - The option count when opening.
 
   `SaneBackend::new` takes a `Logger`.
-- [ ] T035 [US3] Install Ctrl-C handling in `src/main.rs` (concept 12):
+- [X] T035 [US3] Install Ctrl-C handling in `src/main.rs` (concept 12):
   - Create `Arc<AtomicBool>`. After `config::prepare`, call `ctrlc::set_handler` with a closure
     that stores `true`. Comment why `Arc` and an atomic are needed to share it with the
     handler's thread.
@@ -428,19 +428,19 @@ checks 6–8 in quickstart.md pass (risk R3).
 
 **Purpose**: documentation, learning-quality review and hardware validation.
 
-- [ ] T036 [P] Write `README.md` at the repo root: purpose, prerequisites (rustup, `libsane-dev`),
+- [X] T036 [P] Write `README.md` at the repo root: purpose, prerequisites (rustup, `libsane-dev`),
   build, usage of `detect` and `capabilities` (with and without `--json`), and a link to the exit
   codes in `specs/001-scanner-detect/contracts/cli.md`. Include a "Permissions" section with the
   udev rule `SUBSYSTEM=="usb", ATTR{idVendor}=="05e3", ATTR{idProduct}=="0144", MODE="0666"`
   for `/etc/udev/rules.d/60-primefilm.rules`, which the permission-denied next step refers to.
-- [ ] T037 Learning review of every file under `src/` (Principle VI):
+- [X] T037 Learning review of every file under `src/` (Principle VI):
   - Each concept in plan.md's "Rust Concepts Introduced" list has an explanatory comment at its
     first use.
   - Every `unsafe` block has `// SAFETY:`.
   - `grep -rn "unwrap()\|expect(" src/` shows only test code or commented, provably safe uses.
   - Add a short "How the code is organized" section to `README.md` that walks the modules in
     reading order.
-- [ ] T038 Run the gates over the whole crate (`Cargo.toml`, `src/`, `tests/`):
+- [X] T038 Run the gates over the whole crate (`Cargo.toml`, `src/`, `tests/`):
   `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`; fix
   anything that fails.
 - [ ] T039 Run the hardware validation in `specs/001-scanner-detect/quickstart.md` steps 1–9

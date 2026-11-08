@@ -1,0 +1,249 @@
+[
+  {
+    "index": 1,
+    "name": "",
+    "title": "Scan Mode",
+    "description": "",
+    "value_type": "group",
+    "unit": "none",
+    "size": 0,
+    "active": true,
+    "settable": false,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 2,
+    "name": "mode",
+    "title": "Scan mode",
+    "description": "Selects the scan mode (e.g., lineart, monochrome, or color).",
+    "value_type": "string",
+    "unit": "none",
+    "size": 6,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "strings",
+      "values": [
+        "Color",
+        "Gray",
+        "RGBI"
+      ]
+    },
+    "value": "Color"
+  },
+  {
+    "index": 3,
+    "name": "resolution",
+    "title": "Scan resolution",
+    "description": "Sets the resolution of the scanned image.",
+    "value_type": "int",
+    "unit": "dpi",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "list",
+      "values": [
+        1800.0,
+        3600.0,
+        7200.0
+      ]
+    },
+    "value": [
+      3600
+    ]
+  },
+  {
+    "index": 4,
+    "name": "depth",
+    "title": "Bit depth",
+    "description": "Number of bits per sample, typical values are 1 for \"line-art\" and 8 for multibit scans.",
+    "value_type": "int",
+    "unit": "bit",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "list",
+      "values": [
+        8.0,
+        16.0
+      ]
+    },
+    "value": [
+      8
+    ]
+  },
+  {
+    "index": 5,
+    "name": "preview",
+    "title": "Preview",
+    "description": "Request a preview-quality scan.",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 6,
+    "name": "",
+    "title": "Geometry",
+    "description": "",
+    "value_type": "group",
+    "unit": "none",
+    "size": 0,
+    "active": true,
+    "settable": false,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 7,
+    "name": "tl-x",
+    "title": "Top-left x",
+    "description": "Top-left x position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 36.0,
+      "step": 0.0
+    },
+    "value": [
+      0.0
+    ]
+  },
+  {
+    "index": 8,
+    "name": "tl-y",
+    "title": "Top-left y",
+    "description": "Top-left y position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 24.0,
+      "step": 0.0
+    },
+    "value": [
+      0.0
+    ]
+  },
+  {
+    "index": 9,
+    "name": "br-x",
+    "title": "Bottom-right x",
+    "description": "Bottom-right x position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 36.0,
+      "step": 0.0
+    },
+    "value": [
+      36.0
+    ]
+  },
+  {
+    "index": 10,
+    "name": "br-y",
+    "title": "Bottom-right y",
+    "description": "Bottom-right y position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 24.0,
+      "step": 0.0
+    },
+    "value": [
+      24.0
+    ]
+  },
+  {
+    "index": 11,
+    "name": "",
+    "title": "Advanced",
+    "description": "",
+    "value_type": "group",
+    "unit": "none",
+    "size": 0,
+    "active": true,
+    "settable": false,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 12,
+    "name": "gamma-table",
+    "title": "Image intensity",
+    "description": "Gamma-correction table.",
+    "value_type": "int",
+    "unit": "none",
+    "size": 1024,
+    "active": false,
+    "settable": true,
+    "automatic": false,
+    "advanced": true,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 255.0,
+      "step": 0.0
+    },
+    "value": null
+  }
+]
