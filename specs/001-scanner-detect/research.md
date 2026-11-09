@@ -36,10 +36,19 @@
   succeeded 1 s after connect, in 1.07 s, and again at 180 s.
 - **Detect output**: `pieusb:libusb:001:008  PIE MF Scanner (film scanner)`. The driver reports
   vendor `PIE` and model `MF Scanner`, not "Reflecta RPS 10M" as the `pieusb.conf` comment
-  suggests. The simulated scanner (`FakeBackend`) and the README examples still use the
-  Reflecta name; update them with the real recording (T040).
-- Not yet checked: `capabilities` against the real scanner, whether opening it moves film (R2),
-  unplug during a read (R3), Ctrl-C (quickstart steps 3–9, task T039).
+  suggests. The simulated scanner and docs now use the real name (T040).
+- **Capabilities** (10:48:20): exit 0 in 0.41 s, 43 options read, scanner stayed on USB. The
+  kernel logged one `reset high-speed USB device` during the open (no disconnect); this looks
+  like the driver resetting the USB link when opening. **Nothing moved** and the scanner
+  stayed idle (observed by the owner), which resolves R2.
+- **Real option set**: resolution is a `fixed` dpi **range** 25–10000 (not a list); modes
+  Lineart, Halftone, Gray, Color, RGBI; depths 1, 8, 16; scan area 36.50 × 24.30 mm; infrared
+  via RGBI plus `correct-infrared`, `clean-image`, `fast-infrared`; per-channel
+  `exposure-time-*`, `gain-*`, `offset-*`. The D8 summary heuristics match these names
+  unchanged. `advance` defaults to true (presumably advances film after a scan; never
+  touched here). The recording replaced the hand-authored fixture (T040).
+- Not yet checked: cross-check with `scanimage -A` (SC-002), busy with VueScan, unplug during a
+  read (R3), Ctrl-C (quickstart steps 3 and 6–9, task T039).
 
 ## Decisions
 
@@ -165,6 +174,7 @@ checked against the real pieusb option list (R4).
 - **R2, side effects of opening**: confirm that `sane_open` on pieusb does not move film or
   start calibration. `scanimage -A` makes the same calls, so run `./scripts/probe.sh` first and
   watch the scanner.
+  *Resolved (2026-11-09)*: `capabilities` opened the XA and read all options; nothing moved.
 - **R3, disconnects**: the disconnect path (exit 7) must be tested by unplugging the scanner
   during `capabilities`.
   *Update (2026-11-09)*: the earlier spontaneous disconnects were caused by colord (see
@@ -172,9 +182,8 @@ checked against the real pieusb option list (R4).
 - **R4, option names**: the fixture starts hand-written from the pieusb option set, and the
   summary heuristics assume standard names. Replace the fixture with a real
   `primefilm capabilities --json` recording once hardware works, and update D8 if names differ.
-  *Status (2026-11-08)*: `src/backend/fixtures/primefilm-xa.json` is **hand-authored** (12
-  options in three groups, values invented to match the XA's published specs) and must be
-  replaced with a real recording (tasks T040, quickstart step 10).
+  *Resolved (2026-11-09)*: the fixture is now the real 43-option recording; the D8 names
+  matched without changes.
 
 ## Implementation notes (2026-11-08)
 

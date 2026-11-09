@@ -22,9 +22,9 @@ use crate::error::ScanError;
 pub struct DeviceInfo {
     /// SANE device name, e.g. `pieusb:libusb:001:004`. Non-empty; used with `--device`.
     pub name: String,
-    /// As reported by the driver, e.g. `Reflecta`. May be empty.
+    /// As reported by the driver, e.g. `PIE`. May be empty.
     pub vendor: String,
-    /// As reported by the driver, e.g. `RPS 10M`. May be empty.
+    /// As reported by the driver, e.g. `MF Scanner`. May be empty.
     pub model: String,
     /// SANE device type, e.g. `film scanner`. Named `kind` because `type` is a Rust keyword.
     pub kind: String,

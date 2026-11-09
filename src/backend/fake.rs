@@ -7,7 +7,8 @@ use crate::capability::Capability;
 use crate::cli::Scenario;
 use crate::error::ScanError;
 
-/// Simulated option list. Hand-authored for now; see research.md R4.
+/// Simulated option list: a real `primefilm --json capabilities` recording from the
+/// PrimeFilm XA (2026-11-09), so tests see the same 43 options the scanner reports.
 const FIXTURE: &str = include_str!("fixtures/primefilm-xa.json");
 
 const FAKE_DEVICE_NAME: &str = "fake:primefilm-xa";
@@ -25,8 +26,8 @@ impl FakeBackend {
 fn fake_device() -> DeviceInfo {
     DeviceInfo {
         name: FAKE_DEVICE_NAME.to_string(),
-        vendor: "Reflecta".to_string(),
-        model: "RPS 10M".to_string(),
+        vendor: "PIE".to_string(),
+        model: "MF Scanner".to_string(),
         kind: "film scanner".to_string(),
     }
 }
@@ -87,6 +88,29 @@ mod tests {
         let options: Vec<Capability> = serde_json::from_str(FIXTURE).unwrap();
         assert!(options.iter().any(|o| o.name == "resolution"));
         assert!(options.iter().any(|o| !o.active && o.value.is_none()));
+    }
+
+    /// The summary rules (research D8) applied to the real recording from the XA.
+    #[test]
+    fn summary_of_real_recording() {
+        use crate::capability::{CapabilitySummary, Constraint, Infrared};
+
+        let options: Vec<Capability> = serde_json::from_str(FIXTURE).unwrap();
+        assert_eq!(options.len(), 43);
+        let summary = CapabilitySummary::from_options(&options);
+        assert_eq!(
+            summary.resolutions_dpi,
+            Some(Constraint::Range {
+                min: 25.0,
+                max: 10000.0,
+                step: 1.0
+            })
+        );
+        assert!(summary.color_modes.unwrap().contains(&"RGBI".to_string()));
+        assert_eq!(summary.bit_depths, Some(vec![1, 8, 16]));
+        let area = summary.scan_area_mm.unwrap();
+        assert!((area.width - 36.5).abs() < 0.01 && (area.height - 24.3).abs() < 0.01);
+        assert_eq!(summary.infrared, Infrared::Available);
     }
 
     #[test]

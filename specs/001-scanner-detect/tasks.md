@@ -447,7 +447,7 @@ checks 6–8 in quickstart.md pass (risk R3).
   with the scanner on, and record the date, film loaded and pass/fail per step in a new file
   `specs/001-scanner-detect/hardware-validation.md`. Update research.md risks R1–R4 with what
   was found, and fix `sane.d/pieusb.conf` if the model byte differs (R1).
-- [ ] T040 Replace the hand-authored fixture with a real recording (quickstart step 10).
+- [X] T040 Replace the hand-authored fixture with a real recording (quickstart step 10).
   Extract the `options` array from `cargo run -q -- --json capabilities` into
   `src/backend/fixtures/primefilm-xa.json`, adjust the summary heuristics in
   `src/capability.rs` if the real option names differ (research D8), and re-run `cargo test`.

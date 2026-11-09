@@ -36,7 +36,7 @@ fn json(stdout: &str) -> Value {
 fn detect_ready() {
     let (code, stdout, _) = primefilm(&["--simulate", "ready", "detect"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("RPS 10M"), "{stdout}");
+    assert!(stdout.contains("MF Scanner"), "{stdout}");
 }
 
 #[test]

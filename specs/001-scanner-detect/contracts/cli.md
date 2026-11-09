@@ -43,7 +43,7 @@ Human output (stdout):
 
 ```text
 Found 1 scanner:
-  pieusb:libusb:001:004  Reflecta RPS 10M (film scanner)
+  pieusb:libusb:001:008  PIE MF Scanner (film scanner)
 ```
 
 ### `capabilities`
@@ -55,7 +55,7 @@ given, it uses the first and says so on stderr.
 Human output (stdout), shape only:
 
 ```text
-Reflecta RPS 10M  (pieusb:libusb:001:004)
+PIE MF Scanner  (pieusb:libusb:001:008)
 
 Summary
   Resolutions   7200, 3600, 1800 dpi
@@ -104,7 +104,7 @@ One document per run on stdout, valid against [output.schema.json](output.schema
   "schema_version": 1,
   "outcome": "found",
   "devices": [
-    {"name": "pieusb:libusb:001:004", "vendor": "Reflecta", "model": "RPS 10M", "kind": "film scanner"}
+    {"name": "pieusb:libusb:001:008", "vendor": "PIE", "model": "MF Scanner", "kind": "film scanner"}
   ]
 }
 ```
