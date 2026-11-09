@@ -7,6 +7,8 @@ use serde::Serialize;
 use crate::backend::DeviceInfo;
 use crate::capability::{Capability, CapabilitySummary, Constraint, Infrared, Unit, Value};
 use crate::error::ScanError;
+use crate::preset::{Preset, Quality, frame_pixels, rgbi16_bytes};
+use crate::scan::{FilmMoved, Outcome, RunKind, RunOptions, RunReport, SavedFile};
 
 /// Version of the `--json` format. Increases only for incompatible changes.
 const SCHEMA_VERSION: u32 = 1;
@@ -223,6 +225,257 @@ fn join<T: ToString>(values: &[T]) -> String {
         .join(", ")
 }
 
+/// `--json` document for `scan`, `roll`, `preview` and `advance`
+/// (`specs/002-film-scan/contracts/scan-output.schema.json`).
+#[derive(Serialize)]
+struct ScanReport {
+    schema_version: u32,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_step: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roll: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preset: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolution_dpi: Option<f64>,
+    files: Vec<SavedFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    film_moved: Option<FilmMoved>,
+}
+
+#[derive(Serialize)]
+struct PresetsReport {
+    schema_version: u32,
+    outcome: &'static str,
+    presets: Vec<PresetInfo>,
+}
+
+#[derive(Serialize)]
+struct PresetInfo {
+    name: &'static str,
+    resolution_dpi: f64,
+    width: u32,
+    height: u32,
+    file_bytes: u64,
+    seconds_per_frame: Option<f64>,
+    default: bool,
+}
+
+/// Print the result of a scanning command: a summary (or JSON) on stdout and, for a failure,
+/// the message and next step on stderr. Progress lines were already printed while scanning.
+pub fn print_run(report: &RunReport, opts: &RunOptions, json: bool) {
+    let (message, next_step) = outcome_text(report, opts);
+    if let Outcome::Failed(_) = report.outcome {
+        if let Some(message) = &message {
+            eprintln!("{message}");
+        }
+        if let Some(next) = &next_step {
+            eprintln!("Next step: {next}");
+        }
+    }
+
+    if json {
+        let outcome = match &report.outcome {
+            Outcome::Completed(_) => "completed",
+            Outcome::EndOfFilm(_) => "end-of-film",
+            Outcome::Failed(err) => err.outcome(),
+        };
+        print_json(&ScanReport {
+            schema_version: SCHEMA_VERSION,
+            outcome,
+            message,
+            next_step,
+            roll: report.roll.clone(),
+            folder: report.folder.as_ref().map(|f| f.display().to_string()),
+            preset: report.quality.map(Quality::name),
+            resolution_dpi: report.quality.map(Quality::dpi),
+            files: report.files.clone(),
+            film_moved: match (report.kind, &report.outcome) {
+                (RunKind::Advance, Outcome::Completed(_)) => Some(FilmMoved::Advanced),
+                (RunKind::Advance, _) => Some(FilmMoved::None),
+                _ => None,
+            },
+        });
+        return;
+    }
+
+    match report.kind {
+        RunKind::Scan | RunKind::Preview => {
+            for file in &report.files {
+                println!("{}", file.image.display());
+            }
+        }
+        RunKind::Roll => println!("{}", roll_summary(report)),
+        RunKind::Advance => {}
+    }
+    match &report.outcome {
+        Outcome::Completed(Some(text)) | Outcome::EndOfFilm(text) => println!("{text}"),
+        Outcome::Completed(None) | Outcome::Failed(_) => {}
+    }
+}
+
+/// "Saved 2 frames (001–002) to <folder> in 2 min 27 s."
+fn roll_summary(report: &RunReport) -> String {
+    let folder = report
+        .folder
+        .as_ref()
+        .map(|f| f.display().to_string())
+        .unwrap_or_default();
+    let frames: Vec<u32> = report.files.iter().filter_map(|f| f.frame).collect();
+    // A slice pattern: `[first, .., last]` matches a list of two or more and names its ends.
+    let range = match frames.as_slice() {
+        [] => return format!("Saved no frames in {}.", duration_text(report.seconds)),
+        [only] => format!("1 frame ({only:03})"),
+        [first, .., last] => format!("{} frames ({first:03}–{last:03})", frames.len()),
+    };
+    format!(
+        "Saved {range} to {folder} in {}.",
+        duration_text(report.seconds)
+    )
+}
+
+/// The outcome's message and next step, if any. For a roll that stopped early, the next step
+/// is the command that resumes it.
+fn outcome_text(report: &RunReport, opts: &RunOptions) -> (Option<String>, Option<String>) {
+    let err = match &report.outcome {
+        Outcome::Completed(text) => return (text.clone(), None),
+        Outcome::EndOfFilm(text) => return (Some(text.clone()), None),
+        Outcome::Failed(err) => err,
+    };
+    let last_saved = report.files.last().and_then(|f| f.frame);
+    let message = match (err, last_saved) {
+        (ScanError::Interrupted, Some(n)) => {
+            format!("Interrupted after frame {n:03}; scanner released.")
+        }
+        _ => err.to_string(),
+    };
+    let resume = match (report.kind, report.next_frame) {
+        (RunKind::Roll, Some(next)) => Some(resume_command(report, opts, next)),
+        _ => None,
+    };
+    let next_step = match (err, resume) {
+        (ScanError::Interrupted, Some(cmd)) => cmd,
+        (ScanError::Disconnected { .. }, Some(cmd)) => {
+            format!("Check power and cable, and where the film is; then run: {cmd}")
+        }
+        (ScanError::ScanFailed { .. }, Some(cmd)) => {
+            format!("Check the film for a jam (use the eject button if needed), then run: {cmd}")
+        }
+        (ScanError::OutputError { .. }, Some(cmd)) => {
+            format!("Check free space and permissions of the output folder, then run: {cmd}")
+        }
+        _ => err.next_step(),
+    };
+    (Some(message), Some(next_step))
+}
+
+/// `primefilm roll --roll R --start-frame N`, repeating the quality and output folder if the
+/// owner chose them.
+fn resume_command(report: &RunReport, opts: &RunOptions, next: u32) -> String {
+    let mut cmd = format!(
+        "primefilm roll --roll {} --start-frame {next}",
+        report.roll.as_deref().unwrap_or_default()
+    );
+    if opts.quality_given {
+        match opts.quality {
+            Quality::Preset(p) => cmd.push_str(&format!(" --preset {p}")),
+            Quality::Custom(dpi) => cmd.push_str(&format!(" --resolution {dpi}")),
+        }
+    }
+    if opts.output_given {
+        cmd.push_str(&format!(
+            " --output {}",
+            shell_quote(&opts.output.display().to_string())
+        ));
+    }
+    cmd
+}
+
+/// Quote `text` for a shell if it contains anything but safe characters.
+fn shell_quote(text: &str) -> String {
+    let safe = |c: char| c.is_ascii_alphanumeric() || "/._-+:=@,".contains(c);
+    if !text.is_empty() && text.chars().all(safe) {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+/// "47 s" or "2 min 27 s".
+fn duration_text(seconds: f64) -> String {
+    let total = seconds.round() as u64;
+    if total < 60 {
+        format!("{total} s")
+    } else {
+        format!("{} min {} s", total / 60, total % 60)
+    }
+}
+
+/// Print the preset table for `primefilm presets`.
+pub fn print_presets(json: bool) {
+    let presets: Vec<PresetInfo> = Preset::ALL
+        .iter()
+        .map(|p| {
+            let (width, height) = frame_pixels(p.dpi());
+            PresetInfo {
+                name: p.name(),
+                resolution_dpi: p.dpi(),
+                width,
+                height,
+                file_bytes: rgbi16_bytes(p.dpi()),
+                seconds_per_frame: p.seconds_per_frame(),
+                default: *p == Preset::DEFAULT,
+            }
+        })
+        .collect();
+    if json {
+        print_json(&PresetsReport {
+            schema_version: SCHEMA_VERSION,
+            outcome: "completed",
+            presets,
+        });
+        return;
+    }
+    println!(
+        "{:<10} {:>9}  {:>13}  {:>9}  {:<18}",
+        "Preset", "dpi", "pixels", "file", "time per frame"
+    );
+    for p in &presets {
+        let time = match p.seconds_per_frame {
+            Some(s) => format!("about {}", duration_text(s)),
+            None => "not yet measured".to_string(),
+        };
+        let marker = if p.default { "  (default)" } else { "" };
+        println!(
+            "{:<10} {:>9}  {:>13}  {:>9}  {:<18}{marker}",
+            p.name,
+            p.resolution_dpi,
+            format!("{} × {}", p.width, p.height),
+            size_text(p.file_bytes),
+            time
+        );
+    }
+    println!();
+    println!("Every full scan is RGB + infrared at 16 bits per channel; presets change only the");
+    println!("resolution. Use --resolution DPI for any other value from 25 to 5000 (the");
+    println!("scanner's sensor resolves no more than 5000 dpi across the frame).");
+}
+
+/// "143 MB" or "1.1 GB".
+fn size_text(bytes: u64) -> String {
+    let mb = bytes as f64 / 1e6;
+    if mb >= 1000.0 {
+        format!("{:.1} GB", mb / 1000.0)
+    } else {
+        format!("{mb:.0} MB")
+    }
+}
+
 /// Print one JSON document on stdout.
 fn print_json<T: Serialize>(value: &T) {
     match serde_json::to_string_pretty(value) {
@@ -230,5 +483,107 @@ fn print_json<T: Serialize>(value: &T) {
         // Our report types contain only strings, numbers, booleans and lists, which always
         // serialize; this arm is here so a future mistake is reported instead of panicking.
         Err(err) => eprintln!("primefilm: internal error writing JSON: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn roll_report(outcome: Outcome) -> RunReport {
+        RunReport {
+            kind: RunKind::Roll,
+            roll: Some("r".to_string()),
+            folder: Some(PathBuf::from("/x/r")),
+            quality: Some(Quality::Preset(Preset::Web)),
+            files: Vec::new(),
+            outcome,
+            next_frame: Some(3),
+            seconds: 147.0,
+        }
+    }
+
+    fn opts(quality_given: bool, output: &str, output_given: bool) -> RunOptions {
+        RunOptions {
+            output: PathBuf::from(output),
+            output_given,
+            device: None,
+            quality: Quality::Preset(Preset::Web),
+            quality_given,
+        }
+    }
+
+    #[test]
+    fn resume_command_repeats_chosen_options() {
+        let report = roll_report(Outcome::Failed(ScanError::Interrupted));
+        assert_eq!(
+            resume_command(&report, &opts(false, "/d", false), 3),
+            "primefilm roll --roll r --start-frame 3"
+        );
+        assert_eq!(
+            resume_command(&report, &opts(true, "/my scans", true), 3),
+            "primefilm roll --roll r --start-frame 3 --preset web --output '/my scans'"
+        );
+    }
+
+    #[test]
+    fn jam_next_step_resumes() {
+        let report = roll_report(Outcome::Failed(ScanError::ScanFailed {
+            frame: Some(3),
+            text: "jam".to_string(),
+        }));
+        let (message, next) = outcome_text(&report, &opts(false, "/d", false));
+        assert!(message.unwrap().contains("frame 003"));
+        assert!(
+            next.unwrap()
+                .ends_with("primefilm roll --roll r --start-frame 3")
+        );
+    }
+
+    #[test]
+    fn durations_and_sizes() {
+        assert_eq!(duration_text(47.4), "47 s");
+        assert_eq!(duration_text(147.0), "2 min 27 s");
+        assert_eq!(size_text(142_500_000), "142 MB");
+        assert_eq!(size_text(1_099_500_000), "1.1 GB");
+        assert_eq!(
+            roll_summary(&roll_report(Outcome::EndOfFilm(String::new()))),
+            "Saved no frames in 2 min 27 s."
+        );
+    }
+
+    #[test]
+    fn scan_report_field_names() {
+        let doc = serde_json::to_value(ScanReport {
+            schema_version: 1,
+            outcome: "completed",
+            message: None,
+            next_step: None,
+            roll: Some("r".into()),
+            folder: None,
+            preset: Some("web"),
+            resolution_dpi: Some(1800.0),
+            files: Vec::new(),
+            film_moved: None,
+        })
+        .unwrap();
+        let keys: Vec<&str> = doc
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "files",
+                "outcome",
+                "preset",
+                "resolution_dpi",
+                "roll",
+                "schema_version"
+            ]
+        );
     }
 }

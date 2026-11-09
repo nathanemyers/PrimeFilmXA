@@ -16,18 +16,25 @@ pub mod backend;
 pub mod capability;
 pub mod cli;
 pub mod error;
+pub mod frame_stats;
+pub mod output;
+pub mod preset;
 pub mod report;
+pub mod scan;
+pub mod tiff;
 pub mod usb;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use backend::fake::FakeBackend;
 use backend::sane::SaneBackend;
-use backend::{DeviceInfo, ScannerBackend};
+use backend::{ScannerBackend, choose_device};
 use capability::CapabilitySummary;
-use cli::{Cli, Command};
+use cli::{Cli, Command, QualityArgs, TargetArgs};
 use error::ScanError;
+use preset::{Preset, Quality};
 use report::Logger;
+use scan::{Outcome, RunOptions, RunReport};
 
 /// The SANE driver used when `--sane-backend` is not given.
 pub const DEFAULT_SANE_BACKEND: &str = "pieusb";
@@ -44,13 +51,38 @@ pub fn sane_backend_name(cli: &Cli) -> &str {
     cli.sane_backend.as_deref().unwrap_or(DEFAULT_SANE_BACKEND)
 }
 
+/// A run that ended in failure. The scanning commands print their own report, error included,
+/// so `reported` tells `main.rs` whether it still needs to print the error.
+#[derive(Debug)]
+pub struct Failure {
+    pub error: ScanError,
+    pub reported: bool,
+}
+
+// Implementing the standard `From` trait teaches the `?` operator a conversion: in a function
+// returning `Result<_, Failure>`, `something()?` on a `Result<_, ScanError>` now turns the
+// error into a `Failure` automatically, so the detect and capabilities code is unchanged.
+impl From<ScanError> for Failure {
+    fn from(error: ScanError) -> Failure {
+        Failure {
+            error,
+            reported: false,
+        }
+    }
+}
+
 /// Run the command chosen on the command line.
 ///
 /// `cancel` is set to `true` by the Ctrl-C handler (see `main.rs`); long operations check it
 /// and stop with [`ScanError::Interrupted`].
-pub fn run(cli: &Cli, log: &Logger, cancel: &AtomicBool) -> Result<(), ScanError> {
+pub fn run(cli: &Cli, log: &Logger, cancel: &AtomicBool) -> Result<(), Failure> {
     match cli.simulate {
-        Some(scenario) => dispatch(&mut FakeBackend::new(scenario), cli, log, cancel),
+        Some(scenario) => dispatch(
+            &mut FakeBackend::new(scenario, cli.simulate_frames),
+            cli,
+            log,
+            cancel,
+        ),
         None => {
             let mut backend = SaneBackend::new(sane_backend_name(cli), *log);
             dispatch(&mut backend, cli, log, cancel)
@@ -67,12 +99,92 @@ fn dispatch<B: ScannerBackend>(
     cli: &Cli,
     log: &Logger,
     cancel: &AtomicBool,
-) -> Result<(), ScanError> {
+) -> Result<(), Failure> {
     match &cli.command {
-        Command::Detect => detect(backend, cli.json, log, cancel),
+        Command::Detect => detect(backend, cli.json, log, cancel)?,
         Command::Capabilities { device } => {
-            capabilities(backend, device.as_deref(), cli.json, log, cancel)
+            capabilities(backend, device.as_deref(), cli.json, log, cancel)?
         }
+        Command::Scan {
+            roll,
+            frame,
+            quality,
+            target,
+        } => {
+            let opts = run_options(target, quality)?;
+            // `unwrap_or_else` runs the function only when no roll name was given.
+            let roll = roll.clone().unwrap_or_else(output::default_roll_name);
+            let report = scan::scan_single(backend, &roll, *frame, &opts, log, cancel)?;
+            finish(&report, &opts, cli.json)?;
+        }
+        Command::Roll {
+            roll,
+            start_frame,
+            frames,
+            quality,
+            target,
+        } => {
+            let opts = run_options(target, quality)?;
+            let roll = roll.clone().unwrap_or_else(output::default_roll_name);
+            let report =
+                scan::scan_roll(backend, &roll, *start_frame, *frames, &opts, log, cancel)?;
+            finish(&report, &opts, cli.json)?;
+        }
+        Command::Preview { target } => {
+            let opts = run_options(target, &QualityArgs::default())?;
+            let report = scan::preview(backend, &opts, log, cancel)?;
+            finish(&report, &opts, cli.json)?;
+        }
+        Command::Advance { device } => {
+            let target = TargetArgs {
+                output: None,
+                device: device.clone(),
+            };
+            // `advance` writes no files, so it must not fail just because $HOME is unset.
+            let opts = RunOptions {
+                output: std::path::PathBuf::new(),
+                output_given: false,
+                device: target.device,
+                quality: Quality::Preset(Preset::DEFAULT),
+                quality_given: false,
+            };
+            let report = scan::advance(backend, opts.device.as_deref(), log, cancel)?;
+            finish(&report, &opts, cli.json)?;
+        }
+        Command::Presets => report::print_presets(cli.json),
+    }
+    Ok(())
+}
+
+/// Turn the scanning commands' shared options into [`RunOptions`].
+fn run_options(target: &TargetArgs, quality: &QualityArgs) -> Result<RunOptions, ScanError> {
+    let output = match &target.output {
+        Some(dir) => dir.clone(),
+        None => output::default_output_root()?,
+    };
+    let chosen = match (quality.preset, quality.resolution) {
+        (Some(preset), _) => Some(Quality::Preset(preset)),
+        (None, Some(dpi)) => Some(Quality::Custom(dpi)),
+        (None, None) => None,
+    };
+    Ok(RunOptions {
+        output,
+        output_given: target.output.is_some(),
+        device: target.device.clone(),
+        quality: chosen.unwrap_or(Quality::Preset(Preset::DEFAULT)),
+        quality_given: chosen.is_some(),
+    })
+}
+
+/// Print a scanning command's report; a failed outcome becomes an already-reported failure.
+fn finish(report: &RunReport, opts: &RunOptions, json: bool) -> Result<(), Failure> {
+    report::print_run(report, opts, json);
+    match &report.outcome {
+        Outcome::Failed(error) => Err(Failure {
+            error: error.clone(),
+            reported: true,
+        }),
+        Outcome::Completed(_) | Outcome::EndOfFilm(_) => Ok(()),
     }
 }
 
@@ -108,27 +220,6 @@ fn capabilities<B: ScannerBackend>(
     let summary = CapabilitySummary::from_options(&options);
     report::print_capabilities(&info, &summary, &options, json);
     Ok(())
-}
-
-/// Pick the `--device` scanner if given, otherwise the first one found.
-fn choose_device(devices: &[DeviceInfo], wanted: Option<&str>) -> Result<DeviceInfo, ScanError> {
-    // `.iter().find(|d| ...)` walks the list with a closure; see `capability.rs` for how
-    // iterators and closures work. `.cloned()` turns the borrowed `&DeviceInfo` it finds into
-    // an owned copy we can return, and `.ok_or(..)` turns `None` into an error.
-    match wanted {
-        Some(name) => devices
-            .iter()
-            .find(|d| d.name == name)
-            .cloned()
-            .ok_or(ScanError::NotFound),
-        None => {
-            let first = devices.first().cloned().ok_or(ScanError::NotFound)?;
-            if devices.len() > 1 {
-                eprintln!("using first scanner: {}", first.name);
-            }
-            Ok(first)
-        }
-    }
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<(), ScanError> {

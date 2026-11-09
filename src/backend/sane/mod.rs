@@ -2,7 +2,7 @@
 //!
 //! This is the only module allowed to use `unsafe` (constitution Principle VI). Every
 //! `unsafe` block says why it is sound in a `// SAFETY:` comment. Code outside this module sees
-//! only safe types: [`Sane`], [`Device`] and [`SaneBackend`].
+//! only safe types: [`Sane`], [`Device`], [`SaneBackend`] and [`SaneSession`].
 
 pub mod config;
 pub mod ffi;
@@ -12,7 +12,10 @@ use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{DeviceInfo, ScannerBackend};
+use super::{
+    ColorFormat, DeviceInfo, FrameParams, ScanKind, ScanSession, ScanSettings, ScannerBackend,
+    choose_device,
+};
 use crate::capability::{Capability, Constraint, Unit, Value, ValueType, fixed_to_f64};
 use crate::error::ScanError;
 use crate::report::Logger;
@@ -90,9 +93,12 @@ impl Sane {
         Ok(devices)
     }
 
-    /// Open a device by its SANE name. The returned [`Device`] borrows `self`, so it cannot
-    /// outlive this SANE context.
-    pub fn open(&self, name: &str) -> Result<Device<'_>, ScanError> {
+    // `self` (not `&self`): opening a device *moves* the SANE context into it. The caller can
+    // no longer use or drop the `Sane` value; the `Device` now owns it and exits SANE when it
+    // is itself dropped. If opening fails, `self` is dropped here, which exits SANE too.
+    /// Open a device by its SANE name. The returned [`Device`] takes ownership of this SANE
+    /// context, so SANE stays initialized exactly as long as the device is open.
+    pub fn open(self, name: &str) -> Result<Device, ScanError> {
         // `CString` is an owned, NUL-terminated string C can read. Building one fails only if
         // `name` contains a NUL byte, which no SANE device name does.
         let c_name = CString::new(name).map_err(|_| ScanError::Sane {
@@ -119,26 +125,28 @@ impl Sane {
 // RAII, "resource acquisition is initialization").
 impl Drop for Sane {
     fn drop(&mut self) {
-        // SAFETY: this `Sane` was created by a successful `sane_init`, and every `Device`
-        // borrowing it has already been dropped (the borrow checker guarantees that), so no
-        // handle is used after SANE exits.
+        // SAFETY: this `Sane` was created by a successful `sane_init`. If a `Device` was
+        // opened, it owns this `Sane`, and its own `drop` (which closes the handle) runs before
+        // its fields are dropped, so no handle is used after SANE exits.
         unsafe { ffi::sane_exit() };
         INITIALIZED.store(false, Ordering::SeqCst);
     }
 }
 
-// Lifetimes: `'a` names "how long the borrowed `Sane` lives". `Device<'a>` holds a
-// `&'a Sane`, so the compiler refuses any code where a `Device` would still exist after its
-// `Sane` is dropped. SANE forbids using a handle after `sane_exit`; this turns that rule into a
-// compile error. It is the one explicit lifetime in the project (plan.md, Complexity Tracking).
-// The field starts with `_` because we never read it; it exists only to hold the borrow.
-/// An open scanner. `sane_close` runs when it is dropped.
-pub struct Device<'a> {
+// Drop order: when a `Device` goes out of scope, Rust first runs `Device`'s own `drop`
+// (below, `sane_close`), then drops its fields in declaration order, which ends with `_sane`
+// (`sane_exit`). So the handle is always closed before SANE exits, as SANE requires, and the
+// compiler makes it impossible to use the `Sane` context separately while a device is open
+// (feature 001 used a borrowed `&Sane` with a lifetime for this; owning it is simpler and lets
+// a session hold the device, research D1). The field starts with `_` because we never read it;
+// it exists only to keep SANE alive.
+/// An open scanner. `sane_close` and then `sane_exit` run when it is dropped.
+pub struct Device {
     handle: ffi::SaneHandle,
-    _sane: &'a Sane,
+    _sane: Sane,
 }
 
-impl Device<'_> {
+impl Device {
     /// Number of options, including option 0 (which holds the count itself).
     pub fn option_count(&self) -> Result<i32, ScanError> {
         let mut count: ffi::SaneWord = 0;
@@ -299,6 +307,175 @@ impl Device<'_> {
     }
 }
 
+/// A value to give an option with [`Device::set_option`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum OptionValue {
+    Bool(bool),
+    Int(i32),
+    /// A real number; sent as SANE's 16.16 fixed point.
+    Fixed(f64),
+    Text(String),
+}
+
+impl Device {
+    /// Find an option's number and descriptor by its name.
+    fn find_option(&self, name: &str) -> Result<(i32, &ffi::SaneOptionDescriptor), ScanError> {
+        let count = self.option_count()?;
+        for index in 1..count {
+            // SAFETY: the handle is open and `index` is below the option count.
+            let desc = unsafe { ffi::sane_get_option_descriptor(self.handle, index) };
+            if desc.is_null() {
+                continue;
+            }
+            // SAFETY: `desc` is non-null and stays valid while the device is open, which the
+            // returned reference's tie to `&self` guarantees.
+            let desc = unsafe { &*desc };
+            // SAFETY: descriptor names are null or NUL-terminated strings owned by SANE.
+            if unsafe { c_str(desc.name) } == name {
+                return Ok((index, desc));
+            }
+        }
+        Err(ScanError::Sane {
+            status: ffi::STATUS_UNSUPPORTED,
+            text: format!("the scanner has no option named {name:?}"),
+        })
+    }
+
+    /// Set option `name` for this session. Returns the value SANE reports back when it had to
+    /// round the requested one (`INFO_INEXACT`), so the caller can log it.
+    pub fn set_option(&self, name: &str, value: &OptionValue) -> Result<Option<Value>, ScanError> {
+        let (index, desc) = self.find_option(name)?;
+        let size = usize::try_from(desc.size).unwrap_or(0);
+        let mut info: ffi::SaneWord = 0;
+        let status = match value {
+            OptionValue::Text(text) => {
+                // A string option's buffer is `size` bytes, NUL included.
+                let mut bytes = text.clone().into_bytes();
+                if bytes.len() >= size {
+                    return Err(ScanError::Sane {
+                        status: ffi::STATUS_INVAL,
+                        text: format!("value {text:?} too long for option {name}"),
+                    });
+                }
+                bytes.resize(size, 0);
+                self.set_raw(index, bytes.as_mut_ptr().cast::<c_void>(), &mut info)
+            }
+            number => {
+                // Fixed point: SANE stores a real number as an integer scaled by 2^16, so 3600.0
+                // becomes 3600 × 65536. `as i32` converts the rounded float to an integer.
+                let word: ffi::SaneWord = match number {
+                    OptionValue::Bool(b) => ffi::SaneWord::from(*b),
+                    OptionValue::Int(n) => *n,
+                    OptionValue::Fixed(x) => (x * 65536.0).round() as ffi::SaneWord,
+                    OptionValue::Text(_) => 0, // handled by the arm above
+                };
+                // One word for a single-valued option; a larger buffer would also be fine.
+                let mut words = vec![word; (size / 4).max(1)];
+                self.set_raw(index, words.as_mut_ptr().cast::<c_void>(), &mut info)
+            }
+        };
+        if status != ffi::STATUS_GOOD {
+            return Err(status_error(status));
+        }
+        if info & ffi::INFO_INEXACT != 0 {
+            let value_type = ValueType::from_sane(desc.type_).unwrap_or(ValueType::Int);
+            return self.read_value(index, value_type, desc.size);
+        }
+        Ok(None)
+    }
+
+    /// `sane_control_option(SET_VALUE)` on a buffer the caller sized from the descriptor.
+    fn set_raw(&self, index: i32, buffer: *mut c_void, info: &mut ffi::SaneWord) -> i32 {
+        // SAFETY: the handle is open; `set_option` sizes `buffer` to at least the option's
+        // `size` bytes (SANE reads at most that many) and keeps it alive during the call;
+        // `info` is a writable `SANE_Int`.
+        unsafe { ffi::sane_control_option(self.handle, index, ffi::ACTION_SET_VALUE, buffer, info) }
+    }
+
+    /// Start a frame: with pieusb this scans the whole frame (and advances the film if asked)
+    /// before returning. Then report the frame's layout.
+    pub fn start(&self) -> Result<ffi::SaneParameters, ScanError> {
+        // SAFETY: the handle is open.
+        let status = unsafe { ffi::sane_start(self.handle) };
+        if status != ffi::STATUS_GOOD {
+            return Err(status_error(status));
+        }
+        let mut params = ffi::SaneParameters {
+            format: 0,
+            last_frame: 0,
+            bytes_per_line: 0,
+            pixels_per_line: 0,
+            lines: 0,
+            depth: 0,
+        };
+        // SAFETY: the handle is open and `params` is a writable `SANE_Parameters`.
+        let status = unsafe { ffi::sane_get_parameters(self.handle, &mut params) };
+        if status != ffi::STATUS_GOOD {
+            self.cancel();
+            return Err(status_error(status));
+        }
+        Ok(params)
+    }
+
+    /// Read the next bytes of the frame into `buf`. `Ok(0)` at the end of the frame.
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, ScanError> {
+        let max_len = ffi::SaneWord::try_from(buf.len()).unwrap_or(ffi::SaneWord::MAX);
+        let mut len: ffi::SaneWord = 0;
+        // SAFETY: the handle is open, `buf` is writable for `max_len` bytes (never more than
+        // its length), and `len` is a writable `SANE_Int`.
+        let status = unsafe { ffi::sane_read(self.handle, buf.as_mut_ptr(), max_len, &mut len) };
+        match status {
+            ffi::STATUS_GOOD => Ok(usize::try_from(len).unwrap_or(0)),
+            ffi::STATUS_EOF => Ok(0),
+            other => Err(status_error(other)),
+        }
+    }
+
+    /// End the current frame (or abandon it). Harmless when no frame is in progress.
+    pub fn cancel(&self) {
+        // SAFETY: the handle is open; `sane_cancel` may be called at any time.
+        unsafe { ffi::sane_cancel(self.handle) };
+    }
+}
+
+/// The options to set for `settings` on `backend` (data-model.md, "Scan Settings"), in the
+/// order to set them: `mode` first, because changing it can change which other options apply.
+pub fn option_plan(backend: &str, settings: &ScanSettings) -> Vec<(&'static str, OptionValue)> {
+    let (mode, depth) = match settings.color {
+        ColorFormat::Rgbi16 => ("RGBI", 16),
+        ColorFormat::Rgb8 => ("Color", 8),
+    };
+    if backend != "pieusb" {
+        // SANE's `test` backend (used by `cargo test`) has no RGBI, `advance` or pieusb
+        // post-processing options, so only the color format and resolution are set; RGBI
+        // becomes 16-bit RGB. A low resolution keeps the test image small but real.
+        let mode = if mode == "RGBI" { "Color" } else { mode };
+        return vec![
+            ("mode", OptionValue::Text(mode.to_string())),
+            ("depth", OptionValue::Int(depth)),
+            ("resolution", OptionValue::Fixed(25.0)),
+        ];
+    }
+    let mut plan = vec![
+        ("mode", OptionValue::Text(mode.to_string())),
+        ("depth", OptionValue::Int(depth)),
+    ];
+    match settings.kind {
+        ScanKind::Full | ScanKind::Throwaway => {
+            plan.push(("resolution", OptionValue::Fixed(settings.resolution_dpi)));
+            plan.push(("preview", OptionValue::Bool(false)));
+        }
+        // pieusb uses its own preview resolution and never advances during a preview.
+        ScanKind::Preview => plan.push(("preview", OptionValue::Bool(true))),
+    }
+    plan.push(("advance", OptionValue::Bool(settings.advance_after)));
+    // Raw data only: pieusb's dust removal and infrared correction are derivative processing
+    // (constitution Principle I).
+    plan.push(("clean-image", OptionValue::Bool(false)));
+    plan.push(("correct-infrared", OptionValue::Bool(false)));
+    plan
+}
+
 /// Decide what a failed value read means: `None` if it succeeded; `Some(Ok(None))` if the
 /// backend just doesn't support reading this option (the value is shown as null);
 /// `Some(Err(..))` for real failures such as I/O errors.
@@ -310,10 +487,11 @@ fn unreadable(status: i32) -> Option<Result<Option<Value>, ScanError>> {
     }
 }
 
-impl Drop for Device<'_> {
+impl Drop for Device {
     fn drop(&mut self) {
         // SAFETY: the handle came from a successful `sane_open` and is closed exactly once,
-        // here. The `'a` borrow guarantees SANE has not exited yet.
+        // here. SANE has not exited yet: the `Sane` it needs is our own field, dropped after
+        // this function returns.
         unsafe { ffi::sane_close(self.handle) };
     }
 }
@@ -403,6 +581,7 @@ const DRIVER_DIRS: [&str; 3] = [
 ];
 
 /// Talks to a real scanner through SANE. Only devices from `backend` are listed (FR-002).
+#[derive(Clone)]
 pub struct SaneBackend {
     backend: String,
     log: Logger,
@@ -542,8 +721,8 @@ impl ScannerBackend for SaneBackend {
         if !devices.iter().any(|d| d.name == device) {
             return Err(ScanError::NotFound);
         }
-        // Rust drops local variables in reverse order of declaration, so `open` (declared
-        // after `sane`) is closed before SANE exits, on success and on every error path.
+        // `open` takes ownership of `sane`; when `open` is dropped at the end of this function
+        // (or on any error path), the device is closed and then SANE exits.
         let open = sane
             .open(device)
             .map_err(|e| self.explain(e, device, "opening the scanner"))?;
@@ -556,5 +735,177 @@ impl ScannerBackend for SaneBackend {
         ));
         open.options(count, cancel, &self.log)
             .map_err(|e| self.explain(e, device, "reading options"))
+    }
+
+    type Session = SaneSession;
+
+    fn open(&mut self, device: Option<&str>) -> Result<SaneSession, ScanError> {
+        let (sane, devices) = self.init_and_list()?;
+        let info = choose_device(&devices, device)?;
+        let opened = sane
+            .open(&info.name)
+            .map_err(|e| self.explain(e, &info.name, "opening the scanner"))?;
+        self.log.step(&format!("opened {} for scanning", info.name));
+        Ok(SaneSession {
+            device: opened,
+            info,
+            checks: self.clone(),
+        })
+    }
+}
+
+/// An open scanner, ready to capture frames. Dropping it closes the scanner and exits SANE.
+pub struct SaneSession {
+    device: Device,
+    info: DeviceInfo,
+    /// The backend's diagnosis helpers and logger, to explain failures precisely.
+    checks: SaneBackend,
+}
+
+impl SaneSession {
+    /// Turn a SANE failure during a frame into the most precise outcome: disconnected, busy,
+    /// permission denied, or else "the scanner reported an error".
+    fn frame_error(&self, err: ScanError) -> ScanError {
+        // We hold the scanner open, so no other program can be using it: "device busy" here
+        // means the scanner itself is not ready, e.g. still pulling in a strip that was just
+        // inserted (seen on the XA, hardware-validation.md).
+        if let ScanError::Sane {
+            status: ffi::STATUS_DEVICE_BUSY,
+            ..
+        } = err
+        {
+            return ScanError::ScanFailed {
+                frame: None,
+                text: "the scanner is not ready (still loading the film?); wait a few seconds \
+                       and try again"
+                    .to_string(),
+            };
+        }
+        match self.checks.explain(err, &self.info.name, "scanning") {
+            ScanError::Sane {
+                status: ffi::STATUS_CANCELLED,
+                ..
+            } => ScanError::Interrupted,
+            ScanError::Sane { text, .. } => ScanError::ScanFailed { frame: None, text },
+            other => other,
+        }
+    }
+}
+
+impl ScanSession for SaneSession {
+    fn device(&self) -> &DeviceInfo {
+        &self.info
+    }
+
+    fn configure(&mut self, settings: &ScanSettings) -> Result<(), ScanError> {
+        for (name, value) in option_plan(&self.checks.backend, settings) {
+            self.checks.log.step(&format!("set {name} = {value:?}"));
+            let rounded = self
+                .device
+                .set_option(name, &value)
+                .map_err(|e| self.frame_error(e))?;
+            if let Some(actual) = rounded {
+                self.checks
+                    .log
+                    .step(&format!("  scanner adjusted {name} to {actual:?}"));
+            }
+        }
+        Ok(())
+    }
+
+    fn start_frame(&mut self, _cancel: &AtomicBool) -> Result<FrameParams, ScanError> {
+        self.checks.log.step("sane_start");
+        let params = self.device.start().map_err(|e| self.frame_error(e))?;
+        self.checks.log.step(&format!(
+            "frame: {} × {} pixels, {} bits, {} bytes per line",
+            params.pixels_per_line, params.lines, params.depth, params.bytes_per_line
+        ));
+        FrameParams::from_sane(
+            params.bytes_per_line,
+            params.pixels_per_line,
+            params.lines,
+            params.depth,
+        )
+        .inspect_err(|_| self.device.cancel())
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, ScanError> {
+        self.device.read(buf).map_err(|e| self.frame_error(e))
+    }
+
+    fn end_frame(&mut self) {
+        self.device.cancel();
+    }
+
+    fn options(&mut self) -> Result<Vec<Capability>, ScanError> {
+        // A flag nobody sets: reading options takes well under a second.
+        let never = AtomicBool::new(false);
+        let count = self.device.option_count()?;
+        self.device.options(count, &never, &self.checks.log)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(kind: ScanKind, color: ColorFormat, advance_after: bool) -> ScanSettings {
+        ScanSettings {
+            kind,
+            resolution_dpi: 3600.0,
+            color,
+            advance_after,
+        }
+    }
+
+    fn value<'a>(plan: &'a [(&str, OptionValue)], name: &str) -> Option<&'a OptionValue> {
+        plan.iter().find(|(n, _)| *n == name).map(|(_, v)| v)
+    }
+
+    /// data-model.md's pieusb mapping, exactly.
+    #[test]
+    fn pieusb_full_scan_options() {
+        let plan = option_plan(
+            "pieusb",
+            &settings(ScanKind::Full, ColorFormat::Rgbi16, true),
+        );
+        assert_eq!(plan[0], ("mode", OptionValue::Text("RGBI".into())));
+        assert_eq!(value(&plan, "depth"), Some(&OptionValue::Int(16)));
+        assert_eq!(
+            value(&plan, "resolution"),
+            Some(&OptionValue::Fixed(3600.0))
+        );
+        assert_eq!(value(&plan, "preview"), Some(&OptionValue::Bool(false)));
+        assert_eq!(value(&plan, "advance"), Some(&OptionValue::Bool(true)));
+        assert_eq!(value(&plan, "clean-image"), Some(&OptionValue::Bool(false)));
+        assert_eq!(
+            value(&plan, "correct-infrared"),
+            Some(&OptionValue::Bool(false))
+        );
+    }
+
+    #[test]
+    fn pieusb_preview_never_advances() {
+        let plan = option_plan(
+            "pieusb",
+            &settings(ScanKind::Preview, ColorFormat::Rgb8, false),
+        );
+        assert_eq!(plan[0], ("mode", OptionValue::Text("Color".into())));
+        assert_eq!(value(&plan, "preview"), Some(&OptionValue::Bool(true)));
+        assert_eq!(value(&plan, "advance"), Some(&OptionValue::Bool(false)));
+        assert_eq!(value(&plan, "resolution"), None);
+    }
+
+    #[test]
+    fn test_backend_gets_color_only() {
+        let plan = option_plan("test", &settings(ScanKind::Full, ColorFormat::Rgbi16, true));
+        assert_eq!(
+            plan,
+            vec![
+                ("mode", OptionValue::Text("Color".into())),
+                ("depth", OptionValue::Int(16)),
+                ("resolution", OptionValue::Fixed(25.0)),
+            ]
+        );
     }
 }

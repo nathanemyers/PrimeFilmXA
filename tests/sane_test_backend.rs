@@ -83,3 +83,47 @@ fn capabilities_human_output() {
     assert!(stdout.contains("Summary"));
     assert!(stdout.contains("(test:0)"), "{stdout}");
 }
+
+/// A real scan through the FFI scan path (`sane_start`, `sane_get_parameters`, `sane_read`,
+/// `sane_cancel`, option setting) against SANE's test scanner, checked by decoding the TIFF.
+#[test]
+fn scan_writes_a_decodable_tiff() {
+    let out = std::env::temp_dir().join(format!("primefilm-sane-test-scan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    let (code, stdout, stderr) = primefilm(&[
+        "--sane-backend",
+        "test",
+        "--json",
+        "scan",
+        "--roll",
+        "t",
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    let file = &doc["files"][0];
+
+    let bytes = std::fs::read(file["image"].as_str().unwrap()).unwrap();
+    let mut decoder = tiff::decoder::Decoder::new(std::io::Cursor::new(bytes)).unwrap();
+    let (width, height) = decoder.dimensions().unwrap();
+    assert_eq!(u64::from(width), file["width"].as_u64().unwrap());
+    assert_eq!(u64::from(height), file["height"].as_u64().unwrap());
+    assert!(width > 1 && height > 1, "{width} × {height}");
+    assert!(matches!(
+        decoder.read_image().unwrap(),
+        tiff::decoder::DecodingResult::U16(_)
+    ));
+
+    let record: Value =
+        serde_json::from_str(&std::fs::read_to_string(file["settings"].as_str().unwrap()).unwrap())
+            .unwrap();
+    assert!(
+        record["scanner"]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("test:")
+    );
+    assert!(!record["options"].as_array().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&out);
+}

@@ -1,6 +1,7 @@
 //! Every way a run can fail, with the message, next step and exit code for each.
 //!
-//! The wording comes from the outcomes table in `specs/001-scanner-detect/contracts/cli.md`.
+//! The wording comes from the outcomes tables in `specs/001-scanner-detect/contracts/cli.md`
+//! and `specs/002-film-scan/contracts/cli.md`.
 
 // An `enum` is a type whose value is exactly one of several *variants*. Unlike C enums, each
 // variant can carry its own data (`Busy` carries a device name, `Sane` a status code and text).
@@ -35,6 +36,23 @@ pub enum ScanError {
 
     #[error("SANE error: {text}")]
     Sane { status: i32, text: String },
+
+    #[error("No film found in the scanner.")]
+    NoFilm,
+
+    #[error("The scanner reported an error while scanning {}: {text}.", frame_text(*frame))]
+    ScanFailed { frame: Option<u32>, text: String },
+
+    #[error("Could not write {path}: {reason}.")]
+    OutputError { path: String, reason: String },
+}
+
+/// "frame 003", or "the frame" when the frame number is not known (e.g. `advance`).
+pub fn frame_text(frame: Option<u32>) -> String {
+    match frame {
+        Some(n) => format!("frame {n:03}"),
+        None => "the frame".to_string(),
+    }
 }
 
 impl ScanError {
@@ -50,6 +68,9 @@ impl ScanError {
             ScanError::PermissionDenied { .. } => 5,
             ScanError::DriverUnavailable { .. } => 6,
             ScanError::Disconnected { .. } => 7,
+            ScanError::NoFilm => 8,
+            ScanError::ScanFailed { .. } => 9,
+            ScanError::OutputError { .. } => 10,
             ScanError::Interrupted => 130,
         }
     }
@@ -63,6 +84,9 @@ impl ScanError {
             ScanError::PermissionDenied { .. } => "permission-denied",
             ScanError::DriverUnavailable { .. } => "driver-unavailable",
             ScanError::Disconnected { .. } => "disconnected",
+            ScanError::NoFilm => "no-film",
+            ScanError::ScanFailed { .. } => "scan-failed",
+            ScanError::OutputError { .. } => "output-error",
             ScanError::Interrupted => "interrupted",
         }
     }
@@ -89,6 +113,13 @@ impl ScanError {
             }
             ScanError::Disconnected { .. } => "Check power and cable, then run the command again.",
             ScanError::Interrupted => "Run the command again when ready.",
+            ScanError::NoFilm => "Insert a film strip and wait for the scanner to load it.",
+            ScanError::ScanFailed { .. } => {
+                "Check the film for a jam (use the eject button if needed), then resume."
+            }
+            ScanError::OutputError { .. } => {
+                "Check free space and permissions of the output folder."
+            }
         };
         text.to_string()
     }
@@ -120,6 +151,15 @@ mod tests {
                 status: 9,
                 text: "Error during device I/O".into(),
             },
+            ScanError::NoFilm,
+            ScanError::ScanFailed {
+                frame: Some(3),
+                text: "Error during device I/O".into(),
+            },
+            ScanError::OutputError {
+                path: "/tmp/x.tif".into(),
+                reason: "No space left on device".into(),
+            },
         ]
     }
 
@@ -136,6 +176,9 @@ mod tests {
                 (7, "disconnected"),
                 (130, "interrupted"),
                 (1, "error"),
+                (8, "no-film"),
+                (9, "scan-failed"),
+                (10, "output-error"),
             ]
         );
     }
@@ -145,7 +188,7 @@ mod tests {
         let mut codes: Vec<u8> = all().iter().map(ScanError::exit_code).collect();
         codes.sort();
         codes.dedup();
-        assert_eq!(codes.len(), 7);
+        assert_eq!(codes.len(), 10);
         assert!(!codes.contains(&0) && !codes.contains(&2));
     }
 
@@ -162,6 +205,23 @@ mod tests {
             .to_string(),
             "No permission to access /dev/bus/usb/001/004."
         );
+    }
+
+    #[test]
+    fn scan_failed_names_the_frame() {
+        let err = ScanError::ScanFailed {
+            frame: Some(3),
+            text: "Error during device I/O".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "The scanner reported an error while scanning frame 003: Error during device I/O."
+        );
+        let err = ScanError::ScanFailed {
+            frame: None,
+            text: "jammed".into(),
+        };
+        assert!(err.to_string().contains("the frame"));
     }
 
     #[test]

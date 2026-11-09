@@ -9,8 +9,11 @@ Current features:
 - `primefilm detect` checks that the scanner is connected and usable.
 - `primefilm capabilities` lists every setting the scanner exposes, starting with a summary of
   the ones that matter for film (resolutions, color modes, bit depths, scan area, infrared).
+- `primefilm scan`, `roll`, `preview`, `advance` and `presets` scan film: one frame, a whole
+  strip, a quick preview, or just move the film on (see [Scanning](#scanning)).
 
-The tool never scans, moves film or changes a scanner setting: it only reads.
+Scans are archival: every full scan is saved untouched as a 16-bit TIFF with the infrared
+channel, next to a JSON record of every setting used, and no existing file is ever replaced.
 
 ## Prerequisites
 
@@ -61,6 +64,75 @@ Failures print a message and a next step on stderr and exit with a distinct code
 4 busy, 5 permission denied, 6 driver unavailable, 7 disconnected, 130 interrupted, 1 other
 SANE error). The full table is in
 [contracts/cli.md](specs/001-scanner-detect/contracts/cli.md#outcomes-and-exit-codes).
+
+## Scanning
+
+Insert a film strip and let the scanner pull it in (wait a few seconds before scanning). Eject
+it with the scanner's own button; the tool never ejects.
+
+| Command | What it does | Film |
+|---------|--------------|------|
+| `primefilm preview` | Quick 300 dpi look at the frame in the scanner (about 12 s), saved to `previews/` | stays put |
+| `primefilm scan` | Scan the frame in the scanner once | stays put |
+| `primefilm roll` | Scan, advance, repeat until the end of the strip | moves one frame after each scan |
+| `primefilm advance` | Move the film on one frame, saving nothing (about 30 s) | moves one frame |
+| `primefilm presets` | List the quality presets | – |
+
+```bash
+primefilm roll --roll kodak-gold-01
+```
+
+```text
+Roll kodak-gold-01 → /home/you/Pictures/primefilm/kodak-gold-01 (preset standard, 3600 dpi)
+Frame 001: scanning…
+Frame 001: saved kodak-gold-01-001.tif (5173 × 3443, RGBI 16-bit) in 91 s; advancing film
+…
+Frame 006: same as the previous frame; end of film.
+Saved 5 frames (001–005) to /home/you/Pictures/primefilm/kodak-gold-01 in 9 min 6 s.
+Reached the end of the film after frame 005.
+```
+
+The PrimeFilm XA does not report the end of the strip; it just stays on the last frame. So the
+tool scans until a frame matches the one before it (or shows no film), and discards that
+repeat. Use `--frames N` to stop after N frames.
+
+**Presets** change only the resolution (`--preset web|standard|high`, or
+`--resolution DPI` for anything from 25 to 5000):
+
+| Preset | dpi | Pixels | File | Time per frame |
+|--------|-----|--------|------|----------------|
+| `web` | 1800 | 2586 × 1721 | 36 MB | 49 s |
+| `standard` (default) | 3600 | 5173 × 3443 | 143 MB | 91 s |
+| `high` | 5000 | 7185 × 4783 | 275 MB | 5 min 14 s |
+
+There is no higher setting: the scanner advertises 10000 dpi, but its sensor resolves at most
+5000 dpi across the frame, and above that the images come out stretched.
+
+A 36-frame roll at `standard` is about 5 GB. The scanner driver also holds each frame in `/tmp`
+while scanning (275 MB at `high`), so keep some space free there.
+
+**Files** go to `$HOME/Pictures/primefilm/` (change with `--output DIR`):
+
+```text
+<roll>/<roll>-001.tif     the scan: RGB + infrared, 16 bits per channel, uncompressed
+<roll>/<roll>-001.json    every setting used: preset, resolution, exposure, gain, scanner, time
+previews/preview-20261109-120248.tif   (8-bit RGB, not archival)
+```
+
+`--roll` defaults to today's date. Frame numbers continue from the highest one already in the
+roll's folder, so a second `scan` or a resumed `roll` just keeps counting; `--frame N` /
+`--start-frame N` choose the number. If a name is taken (rescanning a frame), `-2`, `-3`, … is
+added. Files are written under a hidden `.partial` name and only appear when complete.
+
+**Stopping and resuming**: Ctrl-C during a roll finishes and saves the frame in progress (the
+scanner has already moved the film on by then), then stops; press it again to abort at once.
+After Ctrl-C, a disconnect or a scanner error, the tool prints the command that continues the
+roll, e.g. `primefilm roll --roll kodak-gold-01 --start-frame 4`.
+
+New exit codes: 8 no film, 9 the scanner reported an error during a scan, 10 a file could not
+be written. Every command takes `--json`; the format is in
+[scan-output.schema.json](specs/002-film-scan/contracts/scan-output.schema.json), and the full
+command reference in [contracts/cli.md](specs/002-film-scan/contracts/cli.md).
 
 ## Permissions
 
@@ -127,6 +199,12 @@ Details are in [research.md](specs/001-scanner-detect/research.md), findings of 
 
 This has been seen repeatedly and the cause is not known yet. Switch the scanner off and on
 and run the command again. See [research.md](specs/001-scanner-detect/research.md), risk R3.
+If it happens during a roll, the frames already saved are kept and the tool prints the command
+that resumes the roll.
+
+### "The scanner is not ready" right after inserting film
+
+The scanner is still pulling the strip in. Wait a few seconds and run the command again.
 
 ## Why only pieusb is loaded
 
@@ -165,22 +243,31 @@ appears.
 2. [src/error.rs](src/error.rs): `ScanError`, every way a run can fail, with its message, next
    step and exit code. Enums, `match`, `Result` and `?`, unit tests.
 3. [src/cli.rs](src/cli.rs): the command-line arguments, defined with clap. `#[derive]`.
-4. [src/backend/mod.rs](src/backend/mod.rs): the `ScannerBackend` trait, the one interface all
-   scanner access goes through, and `DeviceInfo`. Structs, traits.
+4. [src/backend/mod.rs](src/backend/mod.rs): the `ScannerBackend` and `ScanSession` traits,
+   the one interface all scanner access goes through. Structs, traits, associated types.
 5. [src/capability.rs](src/capability.rs): scanner options and the film summary. Iterators and
    closures, serde attributes.
 6. [src/backend/fake.rs](src/backend/fake.rs): the simulated scanner used by tests, with
    [fixtures/primefilm-xa.json](src/backend/fixtures/primefilm-xa.json).
 7. [src/report.rs](src/report.rs): text and JSON output. Serde.
-8. [src/main.rs](src/main.rs): the binary: SANE config, Ctrl-C handling, exit codes. `Arc` and
+8. [src/preset.rs](src/preset.rs): the quality presets. Associated constants, `Display`.
+9. [src/tiff.rs](src/tiff.rs): the streaming TIFF writer. `Write` and `Seek`, byte order.
+10. [src/frame_stats.rs](src/frame_stats.rs): the "no film" and "same frame" checks.
+11. [src/output.rs](src/output.rs): folders, numbering, `.partial` files published with a hard
+    link so nothing is ever overwritten. `std::fs`, `Drop`.
+12. [src/scan.rs](src/scan.rs): the `scan`, `roll`, `preview` and `advance` sequences, written
+    once against the backend traits. Reused buffers, `Option` defaults.
+13. [src/main.rs](src/main.rs): the binary: SANE config, Ctrl-C handling, exit codes. `Arc` and
    atomics.
-9. [src/usb.rs](src/usb.rs): reads `/sys` to tell "off" from "busy" from "no permission".
-10. [src/backend/sane/ffi.rs](src/backend/sane/ffi.rs): raw C declarations from `sane.h`. FFI,
+14. [src/usb.rs](src/usb.rs): reads `/sys` to tell "off" from "busy" from "no permission".
+15. [src/backend/sane/ffi.rs](src/backend/sane/ffi.rs): raw C declarations from `sane.h`. FFI,
     `#[repr(C)]`, raw pointers.
-11. [src/backend/sane/config.rs](src/backend/sane/config.rs): writes the pieusb-only SANE config.
-12. [src/backend/sane/mod.rs](src/backend/sane/mod.rs): the safe wrapper (`Sane`, `Device<'a>`)
-    and `SaneBackend`. `unsafe` and `// SAFETY:`, `Drop`, the project's one lifetime.
-13. [tests/](tests/): integration tests that run the real binary.
+16. [src/backend/sane/config.rs](src/backend/sane/config.rs): writes the pieusb-only SANE config.
+17. [src/backend/sane/mod.rs](src/backend/sane/mod.rs): the safe wrapper (`Sane`, `Device`),
+    `SaneBackend` and `SaneSession`. `unsafe` and `// SAFETY:`, `Drop` and drop order, moving
+    ownership.
+18. [tests/](tests/): integration tests that run the real binary.
 
-Design notes, decisions and open hardware questions are in
-[specs/001-scanner-detect/](specs/001-scanner-detect/).
+Design notes, decisions and hardware findings are in
+[specs/001-scanner-detect/](specs/001-scanner-detect/) and
+[specs/002-film-scan/](specs/002-film-scan/).
