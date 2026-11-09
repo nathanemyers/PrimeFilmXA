@@ -4,8 +4,9 @@
 //! Nothing here is safe to use directly: the compiler cannot check what C does with the
 //! pointers we hand it. The safe wrapper in `mod.rs` is the only code that calls these.
 //!
-//! Only `ACTION_GET_VALUE` is declared, so this tool has no way to change a scanner setting
-//! (FR-006). `sane_start`/`sane_read` are deliberately absent: this feature never scans.
+//! Feature 001 only read options (`ACTION_GET_VALUE`). Feature 002 adds what scanning needs:
+//! setting options (`ACTION_SET_VALUE`; values last for the session only, nothing is stored
+//! on the scanner) and `sane_start` / `sane_get_parameters` / `sane_read` / `sane_cancel`.
 
 use std::ffi::{c_char, c_void};
 
@@ -60,6 +61,18 @@ pub struct SaneOptionDescriptor {
     pub constraint: *const c_void,
 }
 
+/// `SANE_Parameters`: the layout of the frame `sane_start` has begun.
+#[repr(C)]
+pub struct SaneParameters {
+    /// One of the `SANE_FRAME_*` values. pieusb reports RGBI as RGB, so we don't rely on it.
+    pub format: i32,
+    pub last_frame: i32,
+    pub bytes_per_line: i32,
+    pub pixels_per_line: i32,
+    pub lines: i32,
+    pub depth: i32,
+}
+
 // `SANE_Status` values.
 pub const STATUS_GOOD: i32 = 0;
 pub const STATUS_UNSUPPORTED: i32 = 1;
@@ -106,8 +119,16 @@ pub const CONSTRAINT_RANGE: i32 = 1;
 pub const CONSTRAINT_WORD_LIST: i32 = 2;
 pub const CONSTRAINT_STRING_LIST: i32 = 3;
 
-/// `SANE_ACTION_GET_VALUE`: the only action this tool ever performs.
+/// `SANE_ACTION_GET_VALUE`: read an option.
 pub const ACTION_GET_VALUE: i32 = 0;
+/// `SANE_ACTION_SET_VALUE`: change an option for this session.
+pub const ACTION_SET_VALUE: i32 = 1;
+
+// `SANE_INFO_*` bits SANE sets after a SET_VALUE.
+/// The value was rounded to one the scanner supports; read it back to see it.
+pub const INFO_INEXACT: i32 = 1;
+/// Other options changed as a result (e.g. became active or inactive).
+pub const INFO_RELOAD_OPTIONS: i32 = 2;
 
 /// `SANE_Auth_Callback`: called by network backends to ask for a password. We pass `None`.
 pub type SaneAuthCallback = Option<unsafe extern "C" fn(*const c_char, *mut c_char, *mut c_char)>;
@@ -135,6 +156,16 @@ unsafe extern "C" {
         info: *mut SaneWord,
     ) -> i32;
     pub fn sane_strstatus(status: i32) -> *const c_char;
+    pub fn sane_start(handle: SaneHandle) -> i32;
+    pub fn sane_get_parameters(handle: SaneHandle, params: *mut SaneParameters) -> i32;
+    /// Copies up to `max_len` bytes into `data` and stores how many in `len`.
+    pub fn sane_read(
+        handle: SaneHandle,
+        data: *mut u8,
+        max_len: SaneWord,
+        len: *mut SaneWord,
+    ) -> i32;
+    pub fn sane_cancel(handle: SaneHandle);
 }
 
 #[cfg(test)]
@@ -149,5 +180,6 @@ mod tests {
         assert_eq!(size_of::<SaneDevice>(), 32);
         assert_eq!(size_of::<SaneRange>(), 12);
         assert_eq!(size_of::<SaneOptionDescriptor>(), 56);
+        assert_eq!(size_of::<SaneParameters>(), 24);
     }
 }

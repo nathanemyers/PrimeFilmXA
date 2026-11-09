@@ -12,6 +12,7 @@ pub const VENDOR_ID: &str = "05e3";
 pub const PRODUCT_ID: &str = "0144";
 
 /// Reads USB device information from a `/sys`-style directory.
+#[derive(Debug, Clone)]
 pub struct UsbProbe {
     sysfs_root: PathBuf,
 }
