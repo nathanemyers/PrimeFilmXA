@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nathanemyers/PrimeFilmXA/specs/003-bw-processing/scan-output.schema.json",
+  "title": "primefilm --json output for scan, roll, preview, advance, presets and films (schema_version 2)",
+  "description": "Every scan, roll, preview, advance and presets run prints one document of this shape. Failures before scanning starts (busy, not found, ...) carry only schema_version, outcome, message and next_step, like feature 001's failure document. Version 2 (feature 003): saved frames are processed positives; files gain share_copy, film, probably_blank and dust_repaired; runs gain film and, for matched rolls, tone_points; the films command lists film stocks.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "outcome"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "outcome": {
+      "enum": [
+        "completed",
+        "end-of-film",
+        "no-film",
+        "scan-failed",
+        "output-error",
+        "disconnected",
+        "interrupted",
+        "error",
+        "not-found",
+        "busy",
+        "permission-denied",
+        "driver-unavailable"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "next_step": {
+      "type": "string"
+    },
+    "roll": {
+      "type": "string"
+    },
+    "folder": {
+      "type": "string"
+    },
+    "preset": {
+      "enum": [
+        "web",
+        "standard",
+        "high",
+        "custom"
+      ]
+    },
+    "resolution_dpi": {
+      "type": "number",
+      "minimum": 25,
+      "maximum": 5000
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/file"
+      }
+    },
+    "film_moved": {
+      "enum": [
+        "advanced",
+        "none"
+      ]
+    },
+    "presets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/preset"
+      }
+    },
+    "film": {
+      "$ref": "#/$defs/stock_value"
+    },
+    "tone_points": {
+      "type": "object",
+      "required": [
+        "black_density",
+        "white_density",
+        "matched_from_frame"
+      ],
+      "description": "Present for roll --match-tones once the points are locked; reused in the resume command",
+      "properties": {
+        "black_density": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "white_density": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "matched_from_frame": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999
+        }
+      }
+    },
+    "films": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/film"
+      }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "required": [
+        "image",
+        "settings",
+        "width",
+        "height",
+        "channels",
+        "bits",
+        "seconds",
+        "film_moved",
+        "film",
+        "probably_blank",
+        "dust_repaired"
+      ],
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999,
+          "description": "Absent for previews"
+        },
+        "image": {
+          "type": "string"
+        },
+        "settings": {
+          "type": "string"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "channels": {
+          "const": "Gray"
+        },
+        "bits": {
+          "enum": [
+            8,
+            16
+          ]
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "film_moved": {
+          "enum": [
+            "advanced",
+            "none"
+          ]
+        },
+        "share_copy": {
+          "type": "string",
+          "description": "8-bit JPEG share copy; absent for previews"
+        },
+        "film": {
+          "$ref": "#/$defs/stock_value"
+        },
+        "probably_blank": {
+          "type": "boolean"
+        },
+        "dust_repaired": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "preset": {
+      "type": "object",
+      "required": [
+        "name",
+        "resolution_dpi",
+        "width",
+        "height",
+        "file_bytes",
+        "default"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "web",
+            "standard",
+            "high"
+          ]
+        },
+        "resolution_dpi": {
+          "type": "number"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "file_bytes": {
+          "type": "integer"
+        },
+        "seconds_per_frame": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Measured on the scanner (E8); null for a preset not yet measured"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      }
+    },
+    "stock_value": {
+      "enum": [
+        "bw",
+        "hp5",
+        "fp4"
+      ]
+    },
+    "film": {
+      "type": "object",
+      "required": [
+        "value",
+        "name",
+        "film_type",
+        "default"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/stock_value"
+        },
+        "name": {
+          "type": "string"
+        },
+        "film_type": {
+          "enum": [
+            "bw-negative"
+          ]
+        },
+        "default": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
