@@ -1,6 +1,8 @@
-//! Runs the scanning commands (`scan`, `roll`, `preview`, `advance`, `presets`) against the
-//! simulated film strip (`--simulate`), covering files written, numbering, film movement, exit
-//! codes and JSON, without hardware (FR-021, Principle IV).
+//! Runs the scanning commands (`scan`, `roll`, `preview`, `advance`, `presets`, `films`)
+//! against the simulated film strip (`--simulate`), covering files written, numbering, film
+//! movement, processing options, exit codes and JSON, without hardware (002 FR-021, 003
+//! FR-022, Principle IV). Since feature 003 every frame is saved as a positive: a 16-bit gray
+//! `.tif` master, a `.jpg` share copy and a `.json` record, and never a raw capture.
 
 // Everything in `tests/` is test code: a panic here is a failed test, which is what we want
 // (constitution Principle VI allows unwrap/expect in tests).
@@ -66,7 +68,7 @@ fn json(stdout: &str) -> Value {
 fn schema() -> Value {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/specs/002-film-scan/contracts/scan-output.schema.json"
+        "/specs/003-bw-processing/contracts/scan-output.schema.json"
     );
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
@@ -81,7 +83,7 @@ fn check_schema(doc: &Value) {
             "missing {key} in {doc}"
         );
     }
-    assert_eq!(doc["schema_version"], 1);
+    assert_eq!(doc["schema_version"], 2);
     let allowed = |prop: &str, value: &Value| {
         schema["properties"][prop]["enum"]
             .as_array()
@@ -104,21 +106,53 @@ fn check_schema(doc: &Value) {
                 "missing {key} in {file}"
             );
         }
-        for key in ["channels", "bits", "film_moved"] {
+        for key in ["bits", "film_moved"] {
             let values = file_schema["properties"][key]["enum"].as_array().unwrap();
             assert!(values.contains(&file[key]), "{key} = {}", file[key]);
         }
+        assert_eq!(
+            file["channels"],
+            file_schema["properties"]["channels"]["const"]
+        );
+        let stocks = schema["$defs"]["stock_value"]["enum"].as_array().unwrap();
+        assert!(stocks.contains(&file["film"]), "film = {}", file["film"]);
     }
 }
 
-/// The first red sample of a saved TIFF: the simulated scanner stores the frame number there.
-fn first_sample(path: &Path) -> u32 {
+/// The pixels of a saved gray TIFF, as 16-bit values (8-bit files scaled up).
+fn gray_pixels(path: &Path) -> (u32, u32, u16, Vec<u16>) {
     let mut decoder = Decoder::new(Cursor::new(fs::read(path).unwrap())).unwrap();
+    let (w, h) = decoder.dimensions().unwrap();
+    assert_eq!(
+        decoder
+            .get_tag_u32(tiff::tags::Tag::PhotometricInterpretation)
+            .unwrap(),
+        1,
+        "black-is-zero gray"
+    );
     match decoder.read_image().unwrap() {
-        DecodingResult::U16(pixels) => u32::from(pixels[0]),
-        DecodingResult::U8(pixels) => u32::from(pixels[0]),
+        DecodingResult::U16(pixels) => (w, h, 16, pixels),
+        DecodingResult::U8(pixels) => (
+            w,
+            h,
+            8,
+            pixels.iter().map(|&v| u16::from(v) * 257).collect(),
+        ),
         _ => panic!("unexpected sample type"),
     }
+}
+
+/// The settings record of a saved frame.
+fn record(path: &Path) -> Value {
+    json(&fs::read_to_string(path).unwrap())
+}
+
+/// `names` without hidden files, which the tests check for separately.
+fn visible(dir: &Path) -> Vec<String> {
+    names(dir)
+        .into_iter()
+        .filter(|n| !n.starts_with('.'))
+        .collect()
 }
 
 // ---- User story 2: scan a single frame ----
@@ -136,17 +170,208 @@ fn scan_saves_one_frame_without_moving_film() {
         s(&out),
     ]);
     assert_eq!(code, 0, "{stderr}");
-    assert_eq!(names(&out.join("t")), vec!["t-001.json", "t-001.tif"]);
+    // A positive master, a share copy and a record; no raw capture, no hidden file.
+    assert_eq!(
+        names(&out.join("t")),
+        vec!["t-001.jpg", "t-001.json", "t-001.tif"]
+    );
     assert!(stdout.contains("t-001.tif"), "{stdout}");
     assert!(stderr.contains("film not moved"), "{stderr}");
+    assert!(stderr.contains("t-001.tif + .jpg"), "{stderr}");
     assert!(!stderr.contains("advancing"), "{stderr}");
 
-    let record = json(&fs::read_to_string(out.join("t/t-001.json")).unwrap());
+    let record = record(&out.join("t/t-001.json"));
+    assert_eq!(record["record_version"], 2);
     assert_eq!(record["preset"], "standard");
+    // The capture's format; the output is described separately.
     assert_eq!(record["color_mode"], "RGBI");
-    assert_eq!(record["bits_per_sample"], 16);
     assert_eq!(record["advance_requested"], false);
     assert!(!record["options"].as_array().unwrap().is_empty());
+    assert_eq!(record["output"]["kind"], "positive-master");
+    assert_eq!(record["output"]["bits_per_sample"], 16);
+    assert_eq!(record["output"]["share_copy"], "t-001.jpg");
+    assert_eq!(record["processing"]["film_type"], "bw-negative");
+    assert_eq!(record["processing"]["film_stock"], "bw");
+    assert_eq!(record["processing"]["points"]["source"], "auto");
+
+    let (w, h, bits, pixels) = gray_pixels(&out.join("t/t-001.tif"));
+    assert_eq!(
+        (w, h, bits),
+        (
+            record["width"].as_u64().unwrap() as u32,
+            record["height"].as_u64().unwrap() as u32,
+            16
+        )
+    );
+    // The clear film-base border of the negative is black in the positive.
+    assert!(
+        pixels[w as usize * 10] < 2000,
+        "border {}",
+        pixels[w as usize * 10]
+    );
+    let jpeg = fs::read(out.join("t/t-001.jpg")).unwrap();
+    assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+}
+
+/// The simulated frames carry three opaque one-pixel specks at these positions
+/// (`backend::fake::dust_specks`).
+fn fake_specks(width: u32, height: u32) -> [(u32, u32); 3] {
+    [
+        (width / 3, height / 3),
+        (width / 2, height / 2),
+        (2 * width / 3, 2 * height / 3),
+    ]
+}
+
+#[test]
+fn dust_is_removed_by_default_and_only_at_the_specks() {
+    let out = temp_dir("dust");
+    let scan = |extra: &[&str]| {
+        let mut args = vec![
+            "--simulate",
+            "ready",
+            "scan",
+            "--roll",
+            "d",
+            "--output",
+            s(&out),
+        ];
+        args.extend(extra);
+        let (code, _, stderr) = primefilm(&args);
+        assert_eq!(code, 0, "{stderr}");
+        stderr
+    };
+    let stderr = scan(&[]);
+    assert!(stderr.contains("3 dust specks removed"), "{stderr}");
+    scan(&["--dust", "off"]);
+    let cleaned = record(&out.join("d/d-001.json"));
+    assert_eq!(cleaned["processing"]["dust"]["level"], "normal");
+    assert_eq!(cleaned["processing"]["dust"]["repaired"], 3);
+    let plain = record(&out.join("d/d-002.json"));
+    assert_eq!(plain["processing"]["dust"]["level"], "off");
+    assert_eq!(plain["processing"]["dust"]["repaired"], 0);
+
+    let (w, h, _, a) = gray_pixels(&out.join("d/d-001.tif"));
+    let (_, _, _, b) = gray_pixels(&out.join("d/d-002.tif"));
+    let specks = fake_specks(w, h);
+    let mut changed = 0;
+    for (i, (pa, pb)) in a.iter().zip(&b).enumerate() {
+        if pa != pb {
+            changed += 1;
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            assert!(
+                specks
+                    .iter()
+                    .any(|&(sx, sy)| x.abs_diff(sx) <= 5 && y.abs_diff(sy) <= 5),
+                "pixel ({x}, {y}) changed away from the specks"
+            );
+        }
+    }
+    assert!(changed >= 3, "the specks were repaired");
+
+    let (code, _, _) = primefilm(&[
+        "--simulate",
+        "ready",
+        "scan",
+        "--dust",
+        "bogus",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn scan_records_the_film_stock() {
+    let out = temp_dir("stock");
+    let (code, stdout, stderr) = primefilm(&[
+        "--json",
+        "--simulate",
+        "ready",
+        "scan",
+        "--roll",
+        "t",
+        "--film",
+        "hp5",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let doc = json(&stdout);
+    check_schema(&doc);
+    assert_eq!(doc["film"], "hp5");
+    assert_eq!(doc["files"][0]["film"], "hp5");
+    assert!(
+        doc["files"][0]["share_copy"]
+            .as_str()
+            .unwrap()
+            .ends_with("t-001.jpg")
+    );
+    let record = record(&out.join("t/t-001.json"));
+    assert_eq!(record["processing"]["film_stock"], "hp5");
+}
+
+#[test]
+fn film_stock_usage_errors_touch_nothing() {
+    let out = temp_dir("filmerr");
+    let (code, _, stderr) = primefilm(&[
+        "--simulate",
+        "ready",
+        "scan",
+        "--film",
+        "color",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 2);
+    assert!(
+        stderr.contains("Color film is not supported yet."),
+        "{stderr}"
+    );
+    let (code, _, stderr) = primefilm(&[
+        "--simulate",
+        "ready",
+        "roll",
+        "--film",
+        "tri-x",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("bw, hp5, fp4"), "{stderr}");
+    assert!(names(&out).is_empty());
+}
+
+#[test]
+fn films_list() {
+    let (code, stdout, _) = primefilm(&["films"]);
+    assert_eq!(code, 0);
+    for text in [
+        "bw",
+        "hp5",
+        "Ilford HP5 Plus",
+        "fp4",
+        "Ilford FP4 Plus",
+        "(default)",
+        "Color film is not supported yet.",
+    ] {
+        assert!(stdout.contains(text), "{text} missing:\n{stdout}");
+    }
+    let (_, stdout, _) = primefilm(&["--json", "films"]);
+    let doc = json(&stdout);
+    assert_eq!(doc["schema_version"], 2);
+    assert_eq!(doc["outcome"], "completed");
+    let films = doc["films"].as_array().unwrap();
+    assert_eq!(films.len(), 3);
+    let film_schema = &schema()["$defs"]["film"];
+    for film in films {
+        for key in film_schema["required"].as_array().unwrap() {
+            assert!(film.get(key.as_str().unwrap()).is_some(), "missing {key}");
+        }
+        assert_eq!(film["film_type"], "bw-negative");
+    }
+    assert_eq!(films[0]["value"], "bw");
+    assert_eq!(films[0]["default"], true);
 }
 
 #[test]
@@ -179,10 +404,13 @@ fn scan_numbering_never_overwrites() {
     assert_eq!(
         names(&out.join("t")),
         vec![
+            "t-001-2.jpg",
             "t-001-2.json",
             "t-001-2.tif",
+            "t-001.jpg",
             "t-001.json",
             "t-001.tif",
+            "t-002.jpg",
             "t-002.json",
             "t-002.tif"
         ]
@@ -255,7 +483,9 @@ fn scan_json() {
     assert_eq!(doc["roll"], "t");
     assert_eq!(doc["files"][0]["frame"], 1);
     assert_eq!(doc["files"][0]["film_moved"], "none");
-    assert_eq!(doc["files"][0]["channels"], "RGBI");
+    assert_eq!(doc["files"][0]["channels"], "Gray");
+    assert_eq!(doc["files"][0]["bits"], 16);
+    assert_eq!(doc["film"], "bw");
 }
 
 #[test]
@@ -299,11 +529,7 @@ fn roll_scans_until_the_film_ends() {
     for (i, file) in files.iter().enumerate() {
         let frame = i as u32 + 1;
         assert_eq!(file["frame"], frame);
-        // In film order: each file holds the frame it is named after.
-        assert_eq!(
-            first_sample(Path::new(file["image"].as_str().unwrap())),
-            frame
-        );
+        // Film order itself is checked on the captured frames in `src/scan.rs`.
         let moved = if frame < 6 { "advanced" } else { "none" };
         assert_eq!(file["film_moved"], moved, "frame {frame}");
     }
@@ -312,7 +538,8 @@ fn roll_scans_until_the_film_ends() {
         stderr.contains("Frame 007: same as the previous frame; end of film."),
         "{stderr}"
     );
-    assert_eq!(names(&out.join("r")).len(), 12);
+    assert_eq!(names(&out.join("r")).len(), 18);
+    assert!(names(&out.join("r")).iter().all(|n| !n.starts_with('.')));
 }
 
 #[test]
@@ -330,7 +557,7 @@ fn roll_frame_limits() {
         s(&out),
     ]);
     assert_eq!(code, 0);
-    assert_eq!(names(&out.join("a")).len(), 6);
+    assert_eq!(names(&out.join("a")).len(), 9);
 
     let (code, stdout, _) = primefilm(&[
         "--simulate",
@@ -345,7 +572,7 @@ fn roll_frame_limits() {
     ]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Saved 2 frames (001–002)"), "{stdout}");
-    assert_eq!(names(&out.join("b")).len(), 4);
+    assert_eq!(names(&out.join("b")).len(), 6);
 }
 
 #[test]
@@ -362,7 +589,7 @@ fn roll_ends_at_an_empty_gate() {
     ]);
     assert_eq!(code, 0);
     assert!(stdout.contains("after frame 003"), "{stdout}");
-    assert_eq!(names(&out.join("e")).len(), 6);
+    assert_eq!(names(&out.join("e")).len(), 9);
 }
 
 #[test]
@@ -375,6 +602,10 @@ fn roll_jam_keeps_saved_frames_and_says_how_to_resume() {
         "roll",
         "--roll",
         "j",
+        "--film",
+        "fp4",
+        "--dust",
+        "off",
         "--output",
         s(&out),
     ]);
@@ -384,14 +615,26 @@ fn roll_jam_keeps_saved_frames_and_says_how_to_resume() {
     assert_eq!(doc["outcome"], "scan-failed");
     assert_eq!(doc["files"].as_array().unwrap().len(), 2);
     let next = doc["next_step"].as_str().unwrap();
+    // The resume command repeats the processing options that were given.
     assert!(
-        next.contains("primefilm roll --roll j --start-frame 3"),
+        next.contains("primefilm roll --roll j --start-frame 3 --film fp4 --dust off"),
         "{next}"
     );
-    // Only finished frames; no partial file left behind.
+    for file in doc["files"].as_array().unwrap() {
+        let record = record(Path::new(file["settings"].as_str().unwrap()));
+        assert_eq!(record["processing"]["film_stock"], "fp4");
+    }
+    // Only finished frames; no partial or raw file left behind.
     assert_eq!(
         names(&out.join("j")),
-        vec!["j-001.json", "j-001.tif", "j-002.json", "j-002.tif"]
+        vec![
+            "j-001.jpg",
+            "j-001.json",
+            "j-001.tif",
+            "j-002.jpg",
+            "j-002.json",
+            "j-002.tif"
+        ]
     );
 }
 
@@ -413,7 +656,8 @@ fn roll_disconnect() {
         "{stderr}"
     );
     assert!(stderr.contains("where the film is"), "{stderr}");
-    assert_eq!(names(&out.join("d")).len(), 4);
+    assert_eq!(names(&out.join("d")).len(), 6);
+    assert!(names(&out.join("d")).iter().all(|n| !n.starts_with('.')));
 }
 
 #[test]
@@ -431,7 +675,7 @@ fn roll_interrupt_saves_the_frame_in_progress_then_resumes() {
     assert_eq!(code, 130);
     assert!(stderr.contains("Interrupted after frame 002"), "{stderr}");
     assert!(stderr.contains("--start-frame 3"), "{stderr}");
-    assert_eq!(names(&out.join("i")).len(), 4);
+    assert_eq!(names(&out.join("i")).len(), 6);
 
     // Resuming continues the numbering without being told the start frame.
     let (code, _, _) = primefilm(&[
@@ -488,9 +732,10 @@ fn preview_goes_to_its_own_folder() {
     assert_eq!(code, 0, "{stderr}");
     let doc = json(&stdout);
     check_schema(&doc);
-    assert_eq!(doc["files"][0]["channels"], "RGB");
+    assert_eq!(doc["files"][0]["channels"], "Gray");
     assert_eq!(doc["files"][0]["bits"], 8);
     assert!(doc["files"][0].get("frame").is_none());
+    assert!(doc["files"][0].get("share_copy").is_none());
     assert_eq!(names(&out), vec!["previews"]);
     let previews = names(&out.join("previews"));
     assert_eq!(previews.len(), 2);
@@ -618,4 +863,265 @@ fn advance_writes_nothing() {
 
     let (code, _, _) = primefilm(&["--simulate", "no-film", "advance"]);
     assert_eq!(code, 8);
+}
+
+// ---- Feature 003, user story 4: adjusting tones ----
+
+/// A value at `fraction` through the sorted pixels.
+fn percentile(pixels: &[u16], fraction: f64) -> f64 {
+    let mut sorted = pixels.to_vec();
+    sorted.sort_unstable();
+    f64::from(sorted[((sorted.len() - 1) as f64 * fraction).round() as usize])
+}
+
+#[test]
+fn brightness_contrast_and_explicit_points() {
+    let out = temp_dir("tones");
+    let scan = |roll: &str, extra: &[&str]| {
+        let mut args = vec![
+            "--simulate",
+            "ready",
+            "scan",
+            "--roll",
+            roll,
+            "--output",
+            s(&out),
+        ];
+        args.extend(extra);
+        let (code, _, stderr) = primefilm(&args);
+        assert_eq!(code, 0, "{stderr}");
+        let (_, _, _, pixels) = gray_pixels(&out.join(format!("{roll}/{roll}-001.tif")));
+        (pixels, record(&out.join(format!("{roll}/{roll}-001.json"))))
+    };
+    let (plain, _) = scan("p", &[]);
+    let (bright, bright_record) = scan("b", &["--brightness", "30"]);
+    let (hard, hard_record) = scan("c", &["--contrast", "30"]);
+    let (soft, _) = scan("s", &["--contrast", "-30"]);
+
+    assert!(percentile(&bright, 0.5) > percentile(&plain, 0.5));
+    for fraction in [0.001, 0.999] {
+        let (a, b) = (percentile(&bright, fraction), percentile(&plain, fraction));
+        assert!((a - b).abs() <= 0.01 * 65535.0, "{fraction}: {a} vs {b}");
+    }
+    assert_eq!(bright_record["processing"]["brightness"], 30);
+    let iqr = |p: &[u16]| percentile(p, 0.75) - percentile(p, 0.25);
+    assert!(
+        iqr(&hard) > iqr(&plain),
+        "{} vs {}",
+        iqr(&hard),
+        iqr(&plain)
+    );
+    assert!(
+        iqr(&soft) < iqr(&plain),
+        "{} vs {}",
+        iqr(&soft),
+        iqr(&plain)
+    );
+    assert_eq!(hard_record["processing"]["contrast"], 30);
+
+    let (_, explicit) = scan("x", &["--black", "0.30", "--white", "1.20"]);
+    let points = &explicit["processing"]["points"];
+    assert_eq!(points["source"], "explicit");
+    assert_eq!(points["black_density"], 0.3);
+    assert_eq!(points["white_density"], 1.2);
+}
+
+#[test]
+fn tone_usage_errors_touch_nothing() {
+    let out = temp_dir("toneerr");
+    for extra in [
+        vec!["--brightness", "51"],
+        vec!["--contrast", "-51"],
+        vec!["--black", "0.2"],
+        vec!["--white", "1.0"],
+        vec!["--black", "1.2", "--white", "1.0"],
+        vec!["--black", "4.5", "--white", "5"],
+        vec!["--black", "abc", "--white", "1"],
+    ] {
+        let mut args = vec!["--simulate", "ready", "scan", "--output", s(&out)];
+        args.extend(&extra);
+        let (code, _, stderr) = primefilm(&args);
+        assert_eq!(code, 2, "{extra:?}: {stderr}");
+    }
+    assert!(names(&out).is_empty());
+}
+
+// ---- Feature 003, user story 5: matching tones across a roll ----
+
+#[test]
+fn matched_roll_shares_one_set_of_points() {
+    let out = temp_dir("match");
+    let (code, stdout, stderr) = primefilm(&[
+        "--json",
+        "--simulate",
+        "ready",
+        "roll",
+        "--roll",
+        "m",
+        "--match-tones",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("tones locked"), "{stderr}");
+    let doc = json(&stdout);
+    check_schema(&doc);
+    assert_eq!(doc["tone_points"]["matched_from_frame"], 1);
+    let files = doc["files"].as_array().unwrap();
+    assert_eq!(files.len(), 6);
+    for file in files {
+        let points = &record(Path::new(file["settings"].as_str().unwrap()))["processing"]["points"];
+        assert_eq!(points["source"], "matched");
+        assert_eq!(points["matched_from_frame"], 1);
+        assert_eq!(points["black_density"], doc["tone_points"]["black_density"]);
+        assert_eq!(points["white_density"], doc["tone_points"]["white_density"]);
+    }
+
+    // Without matching, each frame has its own points.
+    let (_, stdout, _) = primefilm(&[
+        "--json",
+        "--simulate",
+        "ready",
+        "roll",
+        "--roll",
+        "u",
+        "--output",
+        s(&out),
+    ]);
+    let doc = json(&stdout);
+    assert!(doc.get("tone_points").is_none());
+}
+
+#[test]
+fn interrupted_matched_roll_resumes_with_the_locked_points() {
+    let out = temp_dir("matchresume");
+    let (code, stdout, stderr) = primefilm(&[
+        "--json",
+        "--simulate",
+        "interrupt",
+        "roll",
+        "--roll",
+        "i",
+        "--match-tones",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 130, "{stderr}");
+    let doc = json(&stdout);
+    let next = doc["next_step"].as_str().unwrap();
+    let black = doc["tone_points"]["black_density"].as_f64().unwrap();
+    let white = doc["tone_points"]["white_density"].as_f64().unwrap();
+    assert!(
+        next.contains(&format!("--black {black:.3} --white {white:.3}")),
+        "{next}"
+    );
+    assert!(!next.contains("--match-tones"), "{next}");
+
+    // Running the printed command continues with the same points.
+    let resume: Vec<&str> = next.split_whitespace().skip(1).collect();
+    let mut args = vec!["--simulate", "ready", "--simulate-frames", "1"];
+    args.extend(resume);
+    let (code, _, stderr) = primefilm(&args);
+    assert_eq!(code, 0, "{stderr}");
+    let points = &record(&out.join("i/i-003.json"))["processing"]["points"];
+    assert_eq!(points["black_density"].as_f64().unwrap(), black);
+    assert_eq!(points["white_density"].as_f64().unwrap(), white);
+}
+
+#[test]
+fn match_tones_is_for_rolls_only() {
+    let (code, _, _) = primefilm(&["--simulate", "ready", "scan", "--match-tones"]);
+    assert_eq!(code, 2);
+}
+
+// ---- Feature 003, user story 6: positive previews ----
+
+#[test]
+fn previews_are_8_bit_positives_without_dust_removal() {
+    let out = temp_dir("previewpos");
+    let (code, stdout, stderr) = primefilm(&[
+        "--json",
+        "--simulate",
+        "ready",
+        "preview",
+        "--film",
+        "hp5",
+        "--brightness",
+        "20",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let doc = json(&stdout);
+    let file = &doc["files"][0];
+    let (_, _, bits, _) = gray_pixels(Path::new(file["image"].as_str().unwrap()));
+    assert_eq!(bits, 8);
+    let record = record(Path::new(file["settings"].as_str().unwrap()));
+    assert_eq!(record["output"]["kind"], "preview");
+    assert!(record["output"].get("share_copy").is_none());
+    assert_eq!(record["processing"]["film_stock"], "hp5");
+    assert_eq!(record["processing"]["brightness"], 20);
+    assert_eq!(record["processing"]["dust"]["level"], "off");
+    assert!(
+        names(&out.join("previews"))
+            .iter()
+            .all(|n| !n.ends_with(".jpg"))
+    );
+
+    let (code, _, _) = primefilm(&[
+        "--simulate",
+        "ready",
+        "preview",
+        "--dust",
+        "normal",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 2, "previews take no --dust");
+}
+
+// ---- Feature 003: development-only raw captures ----
+
+#[test]
+fn keep_capture_writes_raw_captures_only_where_asked() {
+    let out = temp_dir("keep");
+    let keep = out.join("captures");
+    let (code, _, stderr) = primefilm(&[
+        "--simulate",
+        "ready",
+        "--keep-capture",
+        s(&keep),
+        "roll",
+        "--roll",
+        "k",
+        "--frames",
+        "2",
+        "--output",
+        s(&out),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(names(&keep), vec!["k-001-capture.tif", "k-002-capture.tif"]);
+    assert!(
+        visible(&out.join("k"))
+            .iter()
+            .all(|n| !n.contains("capture"))
+    );
+    let record = record(&out.join("k/k-001.json"));
+    assert!(
+        record["processing"]["kept_capture"]
+            .as_str()
+            .unwrap()
+            .ends_with("k-001-capture.tif")
+    );
+    // The kept capture is the raw negative: 4 samples (RGBI) of 16 bits.
+    let mut decoder = Decoder::new(Cursor::new(
+        fs::read(keep.join("k-001-capture.tif")).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(
+        decoder
+            .get_tag_u32(tiff::tags::Tag::SamplesPerPixel)
+            .unwrap(),
+        4
+    );
 }

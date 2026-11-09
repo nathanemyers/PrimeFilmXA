@@ -7,7 +7,8 @@
 //! write the directory once the data is complete, then go back and fill in the header. Memory
 //! use stays small no matter how big the frame is.
 //!
-//! Supported: 8 or 16 bits per sample; 3 samples (RGB) or 4 (RGB plus infrared, marked as an
+//! Supported: 8 or 16 bits per sample; 1 sample (gray, black is zero: the processed B&W
+//! positives of feature 003), 3 samples (RGB) or 4 (RGB plus infrared, marked as an
 //! "unspecified" extra sample, as VueScan writes RGBI files). Files are limited to 4 GB, the
 //! most a classic TIFF can address; the largest preset frame is about 1.1 GB.
 
@@ -18,7 +19,7 @@ use std::io::{self, Seek, SeekFrom, Write};
 pub struct TiffLayout {
     pub width: u32,
     pub height: u32,
-    /// 3 (RGB) or 4 (RGB + infrared).
+    /// 1 (gray), 3 (RGB) or 4 (RGB + infrared).
     pub channels: u16,
     /// 8 or 16.
     pub bits: u16,
@@ -96,7 +97,7 @@ pub struct TiffWriter<W: Write + Seek> {
 impl<W: Write + Seek> TiffWriter<W> {
     /// Check the layout and write the header. `out` should be empty and positioned at 0.
     pub fn new(mut out: W, layout: TiffLayout) -> io::Result<TiffWriter<W>> {
-        if !matches!(layout.channels, 3 | 4) || !matches!(layout.bits, 8 | 16) {
+        if !matches!(layout.channels, 1 | 3 | 4) || !matches!(layout.bits, 8 | 16) {
             return Err(invalid(format!(
                 "unsupported layout: {} channels, {} bits",
                 layout.channels, layout.bits
@@ -126,7 +127,8 @@ impl<W: Write + Seek> TiffWriter<W> {
         })
     }
 
-    /// Append sample bytes, pixel by pixel (R, G, B[, I] for each pixel), rows top to bottom.
+    /// Append sample bytes, pixel by pixel (gray, or R, G, B[, I] for each pixel), rows top to
+    /// bottom.
     /// 16-bit samples arrive in this computer's native byte order, as SANE delivers them, and
     /// are stored little-endian. Fails if more bytes arrive than the image holds.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -261,12 +263,14 @@ impl<W: Write + Seek> TiffWriter<W> {
         let dpi_x = (l.dpi_x * 100.0).round() as u32;
         let dpi_y = (l.dpi_y * 100.0).round() as u32;
 
+        // 1 = BlackIsZero (gray, 0 is black), 2 = RGB.
+        let photometric = if l.channels == 1 { 1 } else { 2 };
         let mut entries = vec![
             long(256, &[l.width]),                              // ImageWidth
             long(257, &[l.height]),                             // ImageLength
             short(258, &vec![l.bits; usize::from(l.channels)]), // BitsPerSample
             short(259, &[1]),                                   // Compression: none
-            short(262, &[2]),                                   // PhotometricInterpretation: RGB
+            short(262, &[photometric]),                         // PhotometricInterpretation
             ascii(270, &l.description),                         // ImageDescription
             long(273, &strip_offsets),                          // StripOffsets
             short(277, &[l.channels]),                          // SamplesPerPixel
@@ -433,6 +437,39 @@ mod tests {
     }
 
     #[test]
+    fn gray_round_trips() {
+        let l = layout(53, 41, 1, 16);
+        let samples: Vec<u16> = (0..53 * 41).map(|i| (i * 31 % 65536) as u16).collect();
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+        let mut writer = TiffWriter::new(Cursor::new(Vec::new()), l).unwrap();
+        for chunk in bytes.chunks(5) {
+            writer.write(chunk).unwrap();
+        }
+        let file = writer.finish().unwrap().into_inner();
+        let mut decoder = Decoder::new(Cursor::new(file)).unwrap();
+        assert_eq!(
+            decoder.get_tag_u32(Tag::PhotometricInterpretation).unwrap(),
+            1
+        );
+        assert_eq!(decoder.get_tag_u32(Tag::SamplesPerPixel).unwrap(), 1);
+        match decoder.read_image().unwrap() {
+            DecodingResult::U16(pixels) => assert_eq!(pixels, samples),
+            other => panic!("expected 16-bit gray, got {other:?}"),
+        }
+
+        let l = layout(9, 7, 1, 8);
+        let samples: Vec<u8> = (0..63).collect();
+        let mut writer = TiffWriter::new(Cursor::new(Vec::new()), l).unwrap();
+        writer.write(&samples).unwrap();
+        let file = writer.finish().unwrap().into_inner();
+        let mut decoder = Decoder::new(Cursor::new(file)).unwrap();
+        match decoder.read_image().unwrap() {
+            DecodingResult::U8(pixels) => assert_eq!(pixels, samples),
+            other => panic!("expected 8-bit gray, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn resolution_is_recorded_per_side() {
         let mut l = layout(4, 4, 3, 8);
         l.dpi_y = 7200.0;
@@ -466,6 +503,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_layouts() {
         assert!(TiffWriter::new(Cursor::new(Vec::new()), layout(2, 2, 2, 8)).is_err());
+        assert!(TiffWriter::new(Cursor::new(Vec::new()), layout(2, 2, 5, 8)).is_err());
         assert!(TiffWriter::new(Cursor::new(Vec::new()), layout(2, 2, 3, 12)).is_err());
         assert!(TiffWriter::new(Cursor::new(Vec::new()), layout(0, 2, 3, 8)).is_err());
     }

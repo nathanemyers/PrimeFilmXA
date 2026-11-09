@@ -14,8 +14,12 @@ use primefilm::cli::Cli;
 use primefilm::report::{self, Logger};
 
 fn main() -> ExitCode {
-    // On invalid arguments `parse` prints clap's usage message and exits with code 2.
+    // On invalid arguments `parse` prints clap's usage message and exits with code 2;
+    // `validate` adds the checks clap cannot express, with the same behavior.
     let cli = Cli::parse();
+    if let Err(err) = cli.validate() {
+        err.exit();
+    }
     let log = Logger::new(cli.verbose);
     match start(&cli, &log) {
         Ok(()) => ExitCode::SUCCESS,
@@ -23,7 +27,7 @@ fn main() -> ExitCode {
             // By now the scanner and SANE have been released: they were dropped when `run`
             // returned. Scanning commands have already printed their report.
             if !failure.reported {
-                report::print_error(&failure.error, cli.json);
+                report::print_error(&failure.error, cli.json, cli.command.schema_version());
             }
             ExitCode::from(failure.error.exit_code())
         }

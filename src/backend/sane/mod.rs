@@ -443,6 +443,7 @@ impl Device {
 pub fn option_plan(backend: &str, settings: &ScanSettings) -> Vec<(&'static str, OptionValue)> {
     let (mode, depth) = match settings.color {
         ColorFormat::Rgbi16 => ("RGBI", 16),
+        ColorFormat::Rgb16 => ("Color", 16),
         ColorFormat::Rgb8 => ("Color", 8),
     };
     if backend != "pieusb" {

@@ -99,8 +99,11 @@ pub enum ScanKind {
 /// Color mode and bit depth of a capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorFormat {
-    /// Red, green, blue and infrared, 16 bits each: every full scan (Principle I).
+    /// Red, green, blue and infrared, 16 bits each.
     Rgbi16,
+    /// Red, green, blue, 16 bits each: full B&W scans if experiment E9 shows it is faster
+    /// (infrared is useless on silver film, research P3).
+    Rgb16,
     /// Red, green, blue, 8 bits each: previews and throwaway scans.
     Rgb8,
 }

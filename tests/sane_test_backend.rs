@@ -86,6 +86,8 @@ fn capabilities_human_output() {
 
 /// A real scan through the FFI scan path (`sane_start`, `sane_get_parameters`, `sane_read`,
 /// `sane_cancel`, option setting) against SANE's test scanner, checked by decoding the TIFF.
+/// Since feature 003 the frame is processed into a 16-bit gray positive with a JPEG share copy
+/// and a version 2 record.
 #[test]
 fn scan_writes_a_decodable_tiff() {
     let out = std::env::temp_dir().join(format!("primefilm-sane-test-scan-{}", std::process::id()));
@@ -110,10 +112,18 @@ fn scan_writes_a_decodable_tiff() {
     assert_eq!(u64::from(width), file["width"].as_u64().unwrap());
     assert_eq!(u64::from(height), file["height"].as_u64().unwrap());
     assert!(width > 1 && height > 1, "{width} × {height}");
+    assert_eq!(
+        decoder
+            .get_tag_u32(tiff::tags::Tag::SamplesPerPixel)
+            .unwrap(),
+        1
+    );
     assert!(matches!(
         decoder.read_image().unwrap(),
         tiff::decoder::DecodingResult::U16(_)
     ));
+    let jpeg = std::fs::read(file["share_copy"].as_str().unwrap()).unwrap();
+    assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
 
     let record: Value =
         serde_json::from_str(&std::fs::read_to_string(file["settings"].as_str().unwrap()).unwrap())
@@ -125,5 +135,7 @@ fn scan_writes_a_decodable_tiff() {
             .starts_with("test:")
     );
     assert!(!record["options"].as_array().unwrap().is_empty());
+    assert_eq!(record["record_version"], 2);
+    assert_eq!(record["output"]["kind"], "positive-master");
     let _ = std::fs::remove_dir_all(&out);
 }

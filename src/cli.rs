@@ -2,10 +2,12 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
+use crate::film::{DustLevel, FilmStock, parse_film};
 use crate::output::{MAX_FRAME, validate_roll_name};
 use crate::preset::{MAX_DPI, MIN_DPI, Preset};
+use crate::process::ProcessSettings;
 
 // `#[derive(...)]` asks the compiler (or a library) to write code for us. `Debug` makes the
 // type printable with `{:?}`; `Parser` (from clap) generates the argument parser, `--help`
@@ -34,6 +36,10 @@ pub struct Cli {
     #[arg(long, global = true, hide = true)]
     pub sane_backend: Option<String>,
 
+    /// Also save each raw capture in this folder (development: tuning and fixtures)
+    #[arg(long, global = true, hide = true)]
+    pub keep_capture: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -59,6 +65,11 @@ pub enum Command {
         #[command(flatten)]
         quality: QualityArgs,
         #[command(flatten)]
+        process: ProcessArgs,
+        /// Dust removal: off, gentle, normal (default), strong
+        #[arg(long, value_enum)]
+        dust: Option<DustLevel>,
+        #[command(flatten)]
         target: TargetArgs,
     },
     /// Scan every frame of a strip or roll, advancing the film after each, until the end
@@ -75,10 +86,20 @@ pub enum Command {
         #[command(flatten)]
         quality: QualityArgs,
         #[command(flatten)]
+        process: ProcessArgs,
+        /// Dust removal: off, gentle, normal (default), strong
+        #[arg(long, value_enum)]
+        dust: Option<DustLevel>,
+        /// Give every frame the tones of the first frame that is not blank
+        #[arg(long)]
+        match_tones: bool,
+        #[command(flatten)]
         target: TargetArgs,
     },
     /// Quick low-resolution preview of the frame in the scanner (the film does not move)
     Preview {
+        #[command(flatten)]
+        process: ProcessArgs,
         #[command(flatten)]
         target: TargetArgs,
     },
@@ -90,6 +111,114 @@ pub enum Command {
     },
     /// List the quality presets
     Presets,
+    /// List the film stocks
+    Films,
+}
+
+impl Command {
+    /// The `schema_version` of this command's `--json` output: 1 for feature 001's commands,
+    /// 2 for the scanning commands since feature 003 (contracts/scan-output.schema.json).
+    pub fn schema_version(&self) -> u32 {
+        match self {
+            Command::Detect | Command::Capabilities { .. } => 1,
+            _ => 2,
+        }
+    }
+}
+
+impl Cli {
+    /// Checks clap cannot express on its own: `--black` must be below `--white`. A failure is
+    /// a usage error like clap's own (exit 2), raised before the scanner is touched.
+    pub fn validate(&self) -> Result<(), clap::Error> {
+        let process = match &self.command {
+            Command::Scan { process, .. }
+            | Command::Roll { process, .. }
+            | Command::Preview { process, .. } => process,
+            _ => return Ok(()),
+        };
+        // A "let chain": `if let … && condition` runs the block only when the pattern matches
+        // and the condition holds, without nesting a second `if`.
+        if let (Some(black), Some(white)) = (process.black, process.white)
+            && black >= white
+        {
+            return Err(Cli::command().error(
+                clap::error::ErrorKind::ValueValidation,
+                format!("--black ({black}) must be below --white ({white})"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// How to turn the negative into a positive (contracts/cli.md, PROCESS OPTIONS).
+#[derive(Debug, Clone, Default, Args)]
+pub struct ProcessArgs {
+    /// Film in the scanner: bw (default), hp5, fp4
+    #[arg(long, value_parser = parse_film)]
+    pub film: Option<FilmStock>,
+    /// Lighter (+) or darker (-) midtones, -50 to 50 (default 0)
+    // A clap value parser with a range: anything outside -50..=50 is a usage error.
+    #[arg(long, allow_negative_numbers = true, value_parser = clap::value_parser!(i32).range(-50..=50))]
+    pub brightness: Option<i32>,
+    /// More (+) or less (-) midtone contrast, -50 to 50 (default 0)
+    #[arg(long, allow_negative_numbers = true, value_parser = clap::value_parser!(i32).range(-50..=50))]
+    pub contrast: Option<i32>,
+    /// Density shown as black, 0.00 to 4.00 (with --white; default: automatic)
+    #[arg(long, value_parser = density, requires = "white")]
+    pub black: Option<f64>,
+    /// Density shown as white, 0.00 to 4.00 (with --black; must be above --black)
+    #[arg(long, value_parser = density, requires = "black")]
+    pub white: Option<f64>,
+}
+
+impl ProcessArgs {
+    /// The processing settings: the stock's profile, overridden by whatever was given.
+    pub fn settings(&self, dust: Option<DustLevel>) -> ProcessSettings {
+        let defaults = ProcessSettings::from_profile(self.film.unwrap_or(FilmStock::DEFAULT));
+        ProcessSettings {
+            brightness: self.brightness.unwrap_or(defaults.brightness),
+            contrast: self.contrast.unwrap_or(defaults.contrast),
+            // `zip` pairs two options: `Some` only when both are given.
+            points: self.black.zip(self.white),
+            dust: dust.unwrap_or(defaults.dust),
+            ..defaults
+        }
+    }
+
+    /// The options given, as command-line words, for resume commands.
+    pub fn flags(&self, dust: Option<DustLevel>) -> Vec<String> {
+        let mut flags = Vec::new();
+        if let Some(film) = self.film {
+            flags.extend(["--film".to_string(), film.value().to_string()]);
+        }
+        if let Some(n) = self.brightness {
+            flags.extend(["--brightness".to_string(), n.to_string()]);
+        }
+        if let Some(n) = self.contrast {
+            flags.extend(["--contrast".to_string(), n.to_string()]);
+        }
+        if let (Some(black), Some(white)) = (self.black, self.white) {
+            flags.extend([
+                "--black".to_string(),
+                black.to_string(),
+                "--white".to_string(),
+                white.to_string(),
+            ]);
+        }
+        if let Some(level) = dust {
+            flags.extend(["--dust".to_string(), level.name().to_string()]);
+        }
+        flags
+    }
+}
+
+/// Parse `--black` / `--white`: a film density from 0.00 to 4.00, kept to 3 decimals like the
+/// points recorded for each frame, so a resumed `--match-tones` roll matches exactly.
+fn density(text: &str) -> Result<f64, String> {
+    match text.parse::<f64>() {
+        Ok(d) if (0.0..=4.0).contains(&d) => Ok((d * 1000.0).round() / 1000.0),
+        _ => Err("densities go from 0.00 to 4.00".to_string()),
+    }
 }
 
 // `#[derive(Args)]` makes a reusable group of options; `#[command(flatten)]` above splices it

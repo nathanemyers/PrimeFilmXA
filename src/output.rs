@@ -124,10 +124,12 @@ pub fn preview_stem(root: &Path) -> Result<(PathBuf, String), ScanError> {
     Ok((dir, stem))
 }
 
-/// `base`, or `base-2`, `base-3`, … : the first stem with neither a `.tif` nor a `.json`.
+/// `base`, or `base-2`, `base-3`, … : the first stem with no `.tif`, `.jpg` or `.json`.
 fn free_stem(dir: &Path, base: &str) -> String {
     let taken = |stem: &str| {
-        dir.join(format!("{stem}.tif")).exists() || dir.join(format!("{stem}.json")).exists()
+        ["tif", "jpg", "json"]
+            .iter()
+            .any(|ext| dir.join(format!("{stem}.{ext}")).exists())
     };
     if !taken(base) {
         return base.to_string();
@@ -224,15 +226,33 @@ impl Drop for PartialFile {
     }
 }
 
-/// Publish a scan's settings record first, then its image, so an image never exists without
-/// the record of how it was made. Returns (image path, settings path).
-pub fn publish_scan(
-    sidecar: (PartialFile, File),
-    image: (PartialFile, File),
-) -> Result<(PathBuf, PathBuf), ScanError> {
-    let settings = sidecar.0.publish(sidecar.1)?;
-    let tiff = image.0.publish(image.1)?;
-    Ok((tiff, settings))
+/// Paths of one published frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublishedFrame {
+    pub master: PathBuf,
+    pub share_copy: Option<PathBuf>,
+    pub record: PathBuf,
+}
+
+/// Publish a frame's settings record first, then its share copy, then its master (research
+/// P10). The master appears last, so a `.tif` always means a complete frame with its record
+/// and share copy beside it; `next_frame` counts `.tif` files only.
+pub fn publish_frame(
+    record: (PartialFile, File),
+    share_copy: Option<(PartialFile, File)>,
+    master: (PartialFile, File),
+) -> Result<PublishedFrame, ScanError> {
+    let record = record.0.publish(record.1)?;
+    let share_copy = match share_copy {
+        Some((partial, file)) => Some(partial.publish(file)?),
+        None => None,
+    };
+    let master = master.0.publish(master.1)?;
+    Ok(PublishedFrame {
+        master,
+        share_copy,
+        record,
+    })
 }
 
 fn io_error(path: &Path, err: &io::Error) -> ScanError {
@@ -309,6 +329,9 @@ mod tests {
         assert_eq!(roll.scan_stem(3), "r-003-2");
         touch(&roll.dir().join("r-003-2.json"), "");
         assert_eq!(roll.scan_stem(3), "r-003-3");
+        // A share copy alone also takes the name.
+        touch(&roll.dir().join("r-003-3.jpg"), "");
+        assert_eq!(roll.scan_stem(3), "r-003-4");
     }
 
     #[test]
@@ -348,13 +371,32 @@ mod tests {
     }
 
     #[test]
-    fn scan_publishes_sidecar_and_image() {
+    fn frame_publishes_record_share_copy_and_master() {
         let dir = temp_dir("scan");
-        let sidecar = PartialFile::create(&dir, "r-001.json").unwrap();
-        let image = PartialFile::create(&dir, "r-001.tif").unwrap();
-        let (tiff, json) = publish_scan(sidecar, image).unwrap();
-        assert!(tiff.ends_with("r-001.tif") && tiff.exists());
-        assert!(json.ends_with("r-001.json") && json.exists());
+        let record = PartialFile::create(&dir, "r-001.json").unwrap();
+        let share = PartialFile::create(&dir, "r-001.jpg").unwrap();
+        let master = PartialFile::create(&dir, "r-001.tif").unwrap();
+        let paths = publish_frame(record, Some(share), master).unwrap();
+        assert!(paths.master.ends_with("r-001.tif") && paths.master.exists());
+        assert!(paths.share_copy.unwrap().exists());
+        assert!(paths.record.ends_with("r-001.json") && paths.record.exists());
+    }
+
+    #[test]
+    fn master_is_published_last() {
+        let dir = temp_dir("order");
+        // Another program took the master's name: the record and share copy are published,
+        // the master is not, so the frame does not count as saved.
+        touch(&dir.join("r-001.tif"), "someone else's");
+        let record = PartialFile::create(&dir, "r-001.json").unwrap();
+        let share = PartialFile::create(&dir, "r-001.jpg").unwrap();
+        let master = PartialFile::create(&dir, "r-001.tif").unwrap();
+        assert!(publish_frame(record, Some(share), master).is_err());
+        assert!(dir.join("r-001.json").exists() && dir.join("r-001.jpg").exists());
+        assert_eq!(
+            fs::read_to_string(dir.join("r-001.tif")).unwrap(),
+            "someone else's"
+        );
     }
 
     #[test]
