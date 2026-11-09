@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nathanemyers/PrimeFilmXA/specs/001-scanner-detect/output.schema.json",
+  "title": "primefilm --json output (schema_version 1)",
+  "type": "object",
+  "required": ["schema_version", "outcome"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "outcome": {
+      "enum": [
+        "found",
+        "error",
+        "not-found",
+        "busy",
+        "permission-denied",
+        "driver-unavailable",
+        "disconnected",
+        "interrupted"
+      ]
+    },
+    "devices": { "type": "array", "items": { "$ref": "#/$defs/device" } },
+    "device": { "$ref": "#/$defs/device" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "options": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
+    "message": { "type": "string" },
+    "next_step": { "type": "string" }
+  },
+  "oneOf": [
+    {
+      "description": "detect success",
+      "properties": { "outcome": { "const": "found" } },
+      "required": ["devices"]
+    },
+    {
+      "description": "capabilities success",
+      "properties": { "outcome": { "const": "found" } },
+      "required": ["device", "summary", "options"]
+    },
+    {
+      "description": "failure",
+      "properties": { "outcome": { "not": { "const": "found" } } },
+      "required": ["message", "next_step"]
+    }
+  ],
+  "$defs": {
+    "device": {
+      "type": "object",
+      "required": ["name", "vendor", "model", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "vendor": { "type": "string" },
+        "model": { "type": "string" },
+        "kind": { "type": "string" }
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["kind"],
+      "oneOf": [
+        { "properties": { "kind": { "const": "none" } } },
+        {
+          "properties": {
+            "kind": { "const": "range" },
+            "min": { "type": "number" },
+            "max": { "type": "number" },
+            "step": { "type": "number", "minimum": 0 }
+          },
+          "required": ["min", "max", "step"]
+        },
+        {
+          "properties": {
+            "kind": { "const": "list" },
+            "values": { "type": "array", "items": { "type": "number" } }
+          },
+          "required": ["values"]
+        },
+        {
+          "properties": {
+            "kind": { "const": "strings" },
+            "values": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["values"]
+        }
+      ]
+    },
+    "value": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "boolean" } },
+        { "type": "array", "items": { "type": "number" } },
+        { "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "required": [
+        "index", "name", "title", "description", "value_type", "unit", "size",
+        "active", "settable", "automatic", "advanced", "constraint", "value"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "value_type": { "enum": ["bool", "int", "fixed", "string", "button", "group"] },
+        "unit": { "enum": ["none", "pixel", "bit", "mm", "dpi", "percent", "microsecond"] },
+        "size": { "type": "integer", "minimum": 0 },
+        "active": { "type": "boolean" },
+        "settable": { "type": "boolean" },
+        "automatic": { "type": "boolean" },
+        "advanced": { "type": "boolean" },
+        "constraint": { "$ref": "#/$defs/constraint" },
+        "value": { "$ref": "#/$defs/value" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["resolutions_dpi", "color_modes", "bit_depths", "scan_area_mm", "infrared"],
+      "properties": {
+        "resolutions_dpi": {
+          "oneOf": [{ "$ref": "#/$defs/constraint" }, { "type": "null" }]
+        },
+        "color_modes": {
+          "oneOf": [{ "type": "array", "items": { "type": "string" } }, { "type": "null" }]
+        },
+        "bit_depths": {
+          "oneOf": [{ "type": "array", "items": { "type": "integer" } }, { "type": "null" }]
+        },
+        "scan_area_mm": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["width", "height"],
+              "properties": {
+                "width": { "type": "number" },
+                "height": { "type": "number" }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "infrared": { "enum": ["available", "not available", "unknown"] }
+      }
+    }
+  }
+}

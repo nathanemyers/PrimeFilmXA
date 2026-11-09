@@ -1,0 +1,34 @@
+# The constitution's gates: every change must pass fmt, clippy and the test suite.
+# Hardware tests are #[ignore]d, so this needs no scanner.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # libsane-dev provides sane.h and libsane.so for linking; it pulls in libsane1,
+      # which ships the SANE `test` backend used by tests/sane_test_backend.rs.
+      - name: Install SANE
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsane-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test

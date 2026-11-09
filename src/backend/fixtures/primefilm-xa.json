@@ -1,0 +1,901 @@
+[
+  {
+    "index": 1,
+    "name": "",
+    "title": "Scan Mode",
+    "description": "",
+    "value_type": "group",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": false,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 2,
+    "name": "mode",
+    "title": "Scan mode",
+    "description": "Selects the scan mode (e.g., lineart, monochrome, or color).",
+    "value_type": "string",
+    "unit": "none",
+    "size": 9,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "strings",
+      "values": [
+        "Lineart",
+        "Halftone",
+        "Gray",
+        "Color",
+        "RGBI"
+      ]
+    },
+    "value": "Color"
+  },
+  {
+    "index": 3,
+    "name": "depth",
+    "title": "Bit depth",
+    "description": "Number of bits per sample, typical values are 1 for \"line-art\" and 8 for multibit scans.",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "list",
+      "values": [
+        1.0,
+        8.0,
+        16.0
+      ]
+    },
+    "value": [
+      8
+    ]
+  },
+  {
+    "index": 4,
+    "name": "resolution",
+    "title": "Scan resolution",
+    "description": "Sets the resolution of the scanned image.",
+    "value_type": "fixed",
+    "unit": "dpi",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 25.0,
+      "max": 10000.0,
+      "step": 1.0
+    },
+    "value": [
+      300.0
+    ]
+  },
+  {
+    "index": 5,
+    "name": "halftone-pattern",
+    "title": "Halftone pattern",
+    "description": "Defines the halftoning (dithering) pattern for scanning halftoned images.",
+    "value_type": "string",
+    "unit": "none",
+    "size": 17,
+    "active": false,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "strings",
+      "values": [
+        "53lpi 45d ROUND",
+        "70lpi 45d ROUND",
+        "75lpi Hori. Line",
+        "4X4 BAYER",
+        "4X4 SCROLL",
+        "5x5 26 Levels",
+        "4x4 SQUARE",
+        "5x5 TILE"
+      ]
+    },
+    "value": null
+  },
+  {
+    "index": 6,
+    "name": "threshold",
+    "title": "Threshold",
+    "description": "Select minimum-brightness to get a white point",
+    "value_type": "fixed",
+    "unit": "percent",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 100.0,
+      "step": 0.0
+    },
+    "value": [
+      50.0
+    ]
+  },
+  {
+    "index": 7,
+    "name": "sharpen",
+    "title": "Sharpen scan",
+    "description": "Sharpen scan by taking more time to discharge the CCD.",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 8,
+    "name": "shading-analysis",
+    "title": "Perform shading analysis",
+    "description": "Collect shading reference data before scanning the image. If set to 'no', this option may be overridden by the scanner.",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 9,
+    "name": "fast-infrared",
+    "title": "Fast infrared scan",
+    "description": "Do not reposition scan head before scanning infrared line. Results in an infrared offset which may deteriorate IR dust and scratch removal.",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 10,
+    "name": "advance",
+    "title": "Advance slide",
+    "description": "Automatically advance to next slide after scan",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      true
+    ]
+  },
+  {
+    "index": 11,
+    "name": "calibration",
+    "title": "Calibration mode",
+    "description": "How to calibrate the scanner.",
+    "value_type": "string",
+    "unit": "none",
+    "size": 19,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "strings",
+      "values": [
+        "default values",
+        "from internal test",
+        "from preview",
+        "from options"
+      ]
+    },
+    "value": "from internal test"
+  },
+  {
+    "index": 12,
+    "name": "",
+    "title": "Geometry",
+    "description": "",
+    "value_type": "group",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": false,
+    "automatic": false,
+    "advanced": true,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 13,
+    "name": "tl-x",
+    "title": "Top-left x",
+    "description": "Top-left x position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 36.499786376953125,
+      "step": 0.0
+    },
+    "value": [
+      0.0
+    ]
+  },
+  {
+    "index": 14,
+    "name": "tl-y",
+    "title": "Top-left y",
+    "description": "Top-left y position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 24.297637939453125,
+      "step": 0.0
+    },
+    "value": [
+      0.0
+    ]
+  },
+  {
+    "index": 15,
+    "name": "br-x",
+    "title": "Bottom-right x",
+    "description": "Bottom-right x position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 36.499786376953125,
+      "step": 0.0
+    },
+    "value": [
+      36.499786376953125
+    ]
+  },
+  {
+    "index": 16,
+    "name": "br-y",
+    "title": "Bottom-right y",
+    "description": "Bottom-right y position of scan area.",
+    "value_type": "fixed",
+    "unit": "mm",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 24.297637939453125,
+      "step": 0.0
+    },
+    "value": [
+      24.297637939453125
+    ]
+  },
+  {
+    "index": 17,
+    "name": "",
+    "title": "Enhancement",
+    "description": "",
+    "value_type": "group",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": false,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 18,
+    "name": "correct-shading",
+    "title": "Correct shading",
+    "description": "Correct data for lamp variations (shading)",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      true
+    ]
+  },
+  {
+    "index": 19,
+    "name": "correct-infrared",
+    "title": "Correct infrared",
+    "description": "Correct infrared for red crosstalk",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 20,
+    "name": "clean-image",
+    "title": "Clean image",
+    "description": "Detect and remove dust and scratch artifacts",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 21,
+    "name": "gain-adjust",
+    "title": "Adjust gain",
+    "description": "Adjust gain determined by calibration procedure.",
+    "value_type": "string",
+    "unit": "none",
+    "size": 6,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "strings",
+      "values": [
+        "* 0.3",
+        "* 0.5",
+        "* 0.8",
+        "* 1.0",
+        "* 1.2",
+        "* 1.6",
+        "* 1.9",
+        "* 2.4",
+        "* 3.0"
+      ]
+    },
+    "value": "* 0.8"
+  },
+  {
+    "index": 22,
+    "name": "crop",
+    "title": "Cropping",
+    "description": "How to crop the image",
+    "value_type": "string",
+    "unit": "none",
+    "size": 8,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "strings",
+      "values": [
+        "None",
+        "Outside",
+        "Inside"
+      ]
+    },
+    "value": "Inside"
+  },
+  {
+    "index": 23,
+    "name": "smooth",
+    "title": "Attenuate film grain",
+    "description": "Amount of smoothening",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "list",
+      "values": [
+        0.0,
+        1.0,
+        2.0,
+        3.0
+      ]
+    },
+    "value": [
+      0
+    ]
+  },
+  {
+    "index": 24,
+    "name": "srgb",
+    "title": "sRGB colors",
+    "description": "Transform image to approximate sRGB color space",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": false,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 25,
+    "name": "invert",
+    "title": "Invert colors",
+    "description": "Correct for generic negative film",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": false,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 26,
+    "name": "",
+    "title": "Advanced",
+    "description": "",
+    "value_type": "group",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": false,
+    "automatic": false,
+    "advanced": true,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": null
+  },
+  {
+    "index": 27,
+    "name": "preview",
+    "title": "Preview",
+    "description": "Request a preview-quality scan.",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 28,
+    "name": "save-shading-data",
+    "title": "Save shading data",
+    "description": "Save shading data in 'pieusb.shading'",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 29,
+    "name": "save-ccdmask",
+    "title": "Save CCD mask",
+    "description": "Save CCD mask 'pieusb.ccd'",
+    "value_type": "bool",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      false
+    ]
+  },
+  {
+    "index": 30,
+    "name": "light",
+    "title": "Light",
+    "description": "Light",
+    "value_type": "int",
+    "unit": "microsecond",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      4
+    ]
+  },
+  {
+    "index": 31,
+    "name": "double-times",
+    "title": "Double times",
+    "description": "Double times",
+    "value_type": "int",
+    "unit": "microsecond",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "none"
+    },
+    "value": [
+      0
+    ]
+  },
+  {
+    "index": 32,
+    "name": "exposure-time-r",
+    "title": "Exposure time red",
+    "description": "The time the red color filter of the CCD is exposed",
+    "value_type": "int",
+    "unit": "microsecond",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 100.0,
+      "max": 10000.0,
+      "step": 1.0
+    },
+    "value": [
+      2937
+    ]
+  },
+  {
+    "index": 33,
+    "name": "exposure-time-g",
+    "title": "Exposure time green",
+    "description": "The time the green color filter of the CCD is exposed",
+    "value_type": "int",
+    "unit": "microsecond",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 100.0,
+      "max": 10000.0,
+      "step": 1.0
+    },
+    "value": [
+      2937
+    ]
+  },
+  {
+    "index": 34,
+    "name": "exposure-time-b",
+    "title": "Exposure time blue",
+    "description": "The time the blue color filter of the CCD is exposed",
+    "value_type": "int",
+    "unit": "microsecond",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 100.0,
+      "max": 10000.0,
+      "step": 1.0
+    },
+    "value": [
+      2937
+    ]
+  },
+  {
+    "index": 35,
+    "name": "exposure-time-i",
+    "title": "Exposure time infrared",
+    "description": "The time the infrared color filter of the CCD is exposed",
+    "value_type": "int",
+    "unit": "microsecond",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 100.0,
+      "max": 10000.0,
+      "step": 1.0
+    },
+    "value": [
+      2937
+    ]
+  },
+  {
+    "index": 36,
+    "name": "gain-r",
+    "title": "Gain red",
+    "description": "The gain of the signal processor for red",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 63.0,
+      "step": 0.0
+    },
+    "value": [
+      19
+    ]
+  },
+  {
+    "index": 37,
+    "name": "gain-g",
+    "title": "Gain green",
+    "description": "The gain of the signal processor for green",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 63.0,
+      "step": 0.0
+    },
+    "value": [
+      19
+    ]
+  },
+  {
+    "index": 38,
+    "name": "gain-b",
+    "title": "Gain blue",
+    "description": "The gain of the signal processor for blue",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 63.0,
+      "step": 0.0
+    },
+    "value": [
+      19
+    ]
+  },
+  {
+    "index": 39,
+    "name": "gain-i",
+    "title": "Gain infrared",
+    "description": "The gain of the signal processor for infrared",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 63.0,
+      "step": 0.0
+    },
+    "value": [
+      19
+    ]
+  },
+  {
+    "index": 40,
+    "name": "offset-r",
+    "title": "Offset red",
+    "description": "The offset of the signal processor for red",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 255.0,
+      "step": 0.0
+    },
+    "value": [
+      0
+    ]
+  },
+  {
+    "index": 41,
+    "name": "offset-g",
+    "title": "Offset greed",
+    "description": "The offset of the signal processor for green",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 255.0,
+      "step": 0.0
+    },
+    "value": [
+      0
+    ]
+  },
+  {
+    "index": 42,
+    "name": "offset-b",
+    "title": "Offset blue",
+    "description": "The offset of the signal processor for blue",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 255.0,
+      "step": 0.0
+    },
+    "value": [
+      0
+    ]
+  },
+  {
+    "index": 43,
+    "name": "offset-i",
+    "title": "Offset infrared",
+    "description": "The offset of the signal processor for infrared",
+    "value_type": "int",
+    "unit": "none",
+    "size": 4,
+    "active": true,
+    "settable": true,
+    "automatic": false,
+    "advanced": false,
+    "constraint": {
+      "kind": "range",
+      "min": 0.0,
+      "max": 255.0,
+      "step": 0.0
+    },
+    "value": [
+      0
+    ]
+  }
+]
