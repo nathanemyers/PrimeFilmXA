@@ -20,20 +20,27 @@
 
 ## Findings from the hardware (2026-11-09)
 
-- **colord claimed the scanner and caused the 90-second disconnects.** On every connect, the
+- **colord claimed the scanner on every connect.** On every connect, the
   `colord` service started its helper `/usr/libexec/colord-sane` (parent: `colord`, cgroup
   `system.slice/colord.service`). The helper loads every SANE backend from `/etc/sane.d`, and
   the scanner's interface was claimed by `usbfs` within 0.5 s of connecting. The helper held
   that claim until the scanner dropped off USB **exactly 90 s after connecting**, in all three
   observed runs (10:23:04 → 10:24:35, 10:27:01 → 10:28:32, 10:31:15 → 10:32:45). During that
   time `primefilm detect` correctly reported busy (exit 4). This also explains the
-  "Device busy" and the unexplained disconnects recorded on 2026-11-08.
+  "Device busy" recorded on 2026-11-08.
 - **Fix**: a systemd override sets `SANE_CONFIG_DIR=/etc/colord-no-sane` (an empty `dll.conf`)
   for `colord.service`, so `colord-sane` loads no drivers. colord keeps managing display and
   printer profiles. Commands are in README.md, "Troubleshooting".
 - **After the fix**: `colord-sane` did not run, the interface stayed unclaimed, and the
   scanner stayed on USB for the full 180 s observed (connected 10:35:58). `primefilm -v detect`
-  succeeded 1 s after connect, in 1.07 s, and again at 180 s.
+  succeeded 1 s after connect, in 1.07 s, and again at 180 s. That run stayed connected for
+  about 20 minutes, until VueScan opened the scanner.
+- **The 90-second disconnect is not explained by colord.** After VueScan opened the scanner it
+  re-enumerated (device 9 at 10:56:42), and with colord-sane not running and the colord fix in
+  place it dropped off USB at 10:58:11, 89 s later. `primefilm detect` had opened it at +23 s
+  (busy, VueScan) and +58 s (exit 0). So far: four disconnects at about 90 s after
+  enumeration (three with colord-sane holding the scanner, one without), and one connection
+  that stayed up (device 8, opened by `primefilm` 1 s after connect). Cause unknown; see R3.
 - **Detect output**: `pieusb:libusb:001:008  PIE MF Scanner (film scanner)`. The driver reports
   vendor `PIE` and model `MF Scanner`, not "Reflecta RPS 10M" as the `pieusb.conf` comment
   suggests. The simulated scanner and docs now use the real name (T040).
@@ -177,8 +184,11 @@ checked against the real pieusb option list (R4).
   *Resolved (2026-11-09)*: `capabilities` opened the XA and read all options; nothing moved.
 - **R3, disconnects**: the disconnect path (exit 7) must be tested by unplugging the scanner
   during `capabilities`.
-  *Update (2026-11-09)*: the earlier spontaneous disconnects were caused by colord (see
-  findings above). The unplug test itself is still to do.
+  *Update (2026-11-09)*: the scanner drops off USB about 90 s after enumerating in four of
+  five observed connections, with and without colord touching it (see findings above); the
+  cause is unknown. Next experiment, if needed: power-cycle and watch without opening the
+  scanner, to see whether it drops on its own. The unplug test (quickstart step 7) was skipped
+  by the owner.
 - **R4, option names**: the fixture starts hand-written from the pieusb option set, and the
   summary heuristics assume standard names. Replace the fixture with a real
   `primefilm capabilities --json` recording once hardware works, and update D8 if names differ.

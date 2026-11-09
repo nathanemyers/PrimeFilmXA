@@ -443,7 +443,7 @@ checks 6–8 in quickstart.md pass (risk R3).
 - [X] T038 Run the gates over the whole crate (`Cargo.toml`, `src/`, `tests/`):
   `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`; fix
   anything that fails.
-- [ ] T039 Run the hardware validation in `specs/001-scanner-detect/quickstart.md` steps 1–9
+- [X] T039 Run the hardware validation in `specs/001-scanner-detect/quickstart.md` steps 1–9
   with the scanner on, and record the date, film loaded and pass/fail per step in a new file
   `specs/001-scanner-detect/hardware-validation.md`. Update research.md risks R1–R4 with what
   was found, and fix `sane.d/pieusb.conf` if the model byte differs (R1).

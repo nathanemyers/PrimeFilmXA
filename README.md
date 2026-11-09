@@ -79,12 +79,11 @@ Then unplug and replug the scanner.
 
 ## Troubleshooting
 
-### "The scanner is in use by another program", or the scanner drops off USB after 90 seconds
+### "The scanner is in use by another program" right after connecting it
 
 On Ubuntu, the color-management service `colord` starts a helper, `colord-sane`, whenever a
 scanner connects. The helper loads every SANE driver and claims the scanner, so `primefilm`
-reports it as busy (exit 4). With the PrimeFilm XA, the scanner then disconnects from USB
-exactly 90 seconds later. Check with:
+reports it as busy (exit 4). Check with:
 
 ```bash
 pgrep -a colord-sane
@@ -123,6 +122,11 @@ sudo rm -r /etc/systemd/system/colord.service.d/no-scanners.conf /etc/colord-no-
 ```
 
 Details are in [research.md](specs/001-scanner-detect/research.md), findings of 2026-11-09.
+
+### The scanner drops off USB about 90 seconds after connecting
+
+This has been seen repeatedly and the cause is not known yet. Switch the scanner off and on
+and run the command again. See [research.md](specs/001-scanner-detect/research.md), risk R3.
 
 ## Why only pieusb is loaded
 
