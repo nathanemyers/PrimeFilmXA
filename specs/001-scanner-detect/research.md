@@ -18,6 +18,29 @@
   installed. pkg-config reports `sane-backends` as `1.2.1-debian` (a stale version string in
   Ubuntu's `.pc` file).
 
+## Findings from the hardware (2026-11-09)
+
+- **colord claimed the scanner and caused the 90-second disconnects.** On every connect, the
+  `colord` service started its helper `/usr/libexec/colord-sane` (parent: `colord`, cgroup
+  `system.slice/colord.service`). The helper loads every SANE backend from `/etc/sane.d`, and
+  the scanner's interface was claimed by `usbfs` within 0.5 s of connecting. The helper held
+  that claim until the scanner dropped off USB **exactly 90 s after connecting**, in all three
+  observed runs (10:23:04 → 10:24:35, 10:27:01 → 10:28:32, 10:31:15 → 10:32:45). During that
+  time `primefilm detect` correctly reported busy (exit 4). This also explains the
+  "Device busy" and the unexplained disconnects recorded on 2026-11-08.
+- **Fix**: a systemd override sets `SANE_CONFIG_DIR=/etc/colord-no-sane` (an empty `dll.conf`)
+  for `colord.service`, so `colord-sane` loads no drivers. colord keeps managing display and
+  printer profiles. Commands are in README.md, "Troubleshooting".
+- **After the fix**: `colord-sane` did not run, the interface stayed unclaimed, and the
+  scanner stayed on USB for the full 180 s observed (connected 10:35:58). `primefilm -v detect`
+  succeeded 1 s after connect, in 1.07 s, and again at 180 s.
+- **Detect output**: `pieusb:libusb:001:008  PIE MF Scanner (film scanner)`. The driver reports
+  vendor `PIE` and model `MF Scanner`, not "Reflecta RPS 10M" as the `pieusb.conf` comment
+  suggests. The simulated scanner (`FakeBackend`) and the README examples still use the
+  Reflecta name; update them with the real recording (T040).
+- Not yet checked: `capabilities` against the real scanner, whether opening it moves film (R2),
+  unplug during a read (R3), Ctrl-C (quickstart steps 3–9, task T039).
+
 ## Decisions
 
 ### D1. Talk to SANE through hand-written FFI
@@ -138,11 +161,14 @@ checked against the real pieusb option list (R4).
   reports a different model in its inquiry data, pieusb will ignore it and the tool will say
   "driver unavailable". Check with `primefilm -vv detect` (sets `SANE_DEBUG_PIEUSB=5`) and
   adjust `sane.d/pieusb.conf`.
+  *Resolved (2026-11-09)*: pieusb recognizes the XA with `0x0048`; `detect` lists it.
 - **R2, side effects of opening**: confirm that `sane_open` on pieusb does not move film or
   start calibration. `scanimage -A` makes the same calls, so run `./scripts/probe.sh` first and
   watch the scanner.
 - **R3, disconnects**: the disconnect path (exit 7) must be tested by unplugging the scanner
   during `capabilities`.
+  *Update (2026-11-09)*: the earlier spontaneous disconnects were caused by colord (see
+  findings above). The unplug test itself is still to do.
 - **R4, option names**: the fixture starts hand-written from the pieusb option set, and the
   summary heuristics assume standard names. Replace the fixture with a real
   `primefilm capabilities --json` recording once hardware works, and update D8 if names differ.

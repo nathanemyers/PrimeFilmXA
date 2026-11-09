@@ -34,7 +34,7 @@ primefilm detect
 
 ```text
 Found 1 scanner:
-  pieusb:libusb:001:004  Reflecta RPS 10M (film scanner)
+  pieusb:libusb:001:008  PIE MF Scanner (film scanner)
 ```
 
 ```bash
@@ -76,6 +76,53 @@ sudo udevadm control --reload-rules
 ```
 
 Then unplug and replug the scanner.
+
+## Troubleshooting
+
+### "The scanner is in use by another program", or the scanner drops off USB after 90 seconds
+
+On Ubuntu, the color-management service `colord` starts a helper, `colord-sane`, whenever a
+scanner connects. The helper loads every SANE driver and claims the scanner, so `primefilm`
+reports it as busy (exit 4). With the PrimeFilm XA, the scanner then disconnects from USB
+exactly 90 seconds later. Check with:
+
+```bash
+pgrep -a colord-sane
+```
+
+The fix gives colord an empty SANE configuration, so it loads no scanner drivers. colord keeps
+managing display and printer color profiles.
+
+```bash
+sudo mkdir -p /etc/colord-no-sane /etc/systemd/system/colord.service.d
+```
+
+```bash
+echo '# Empty on purpose: colord loads no scanner drivers.' | sudo tee /etc/colord-no-sane/dll.conf
+```
+
+```bash
+printf '[Service]\nEnvironment=SANE_CONFIG_DIR=/etc/colord-no-sane\n' | sudo tee /etc/systemd/system/colord.service.d/no-scanners.conf
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart colord
+```
+
+Confirm it took effect (it should print `Environment=SANE_CONFIG_DIR=/etc/colord-no-sane`),
+then switch the scanner off and on:
+
+```bash
+systemctl show colord -p Environment
+```
+
+To undo it:
+
+```bash
+sudo rm -r /etc/systemd/system/colord.service.d/no-scanners.conf /etc/colord-no-sane && sudo systemctl daemon-reload && sudo systemctl restart colord
+```
+
+Details are in [research.md](specs/001-scanner-detect/research.md), findings of 2026-11-09.
 
 ## Why only pieusb is loaded
 
