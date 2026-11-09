@@ -483,6 +483,9 @@ impl SaneBackend {
 
         if devices.is_empty() {
             return Err(match usb {
+                // pieusb skips a scanner it can't open. If another program claimed it after
+                // our check in `diagnose_before_init`, that is "busy", not a driver problem.
+                Some(usb) if self.usb.is_claimed(&usb) => ScanError::Busy { device: None },
                 Some(_) => ScanError::DriverUnavailable {
                     reason: "scanner on USB but pieusb did not recognize it (check the model \
                              number in sane.d/pieusb.conf; run with -vv)"

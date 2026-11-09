@@ -9,10 +9,21 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::process::Command;
+use std::sync::Mutex;
 
 use serde_json::Value;
 
+/// There is one physical scanner, but `cargo test` runs tests in parallel. Each test holds
+/// this lock while it runs `primefilm`, so they take turns instead of fighting over the USB
+/// interface. A `Mutex` ("mutual exclusion") lets only one thread hold it at a time.
+static SCANNER: Mutex<()> = Mutex::new(());
+
 fn primefilm(args: &[&str]) -> (i32, String, String) {
+    // If an earlier test panicked while holding the lock, the lock is "poisoned"; the scanner
+    // itself is fine, so take the lock anyway rather than failing every later test.
+    let _turn = SCANNER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let out = Command::new(env!("CARGO_BIN_EXE_primefilm"))
         .args(args)
         .output()
