@@ -14,12 +14,8 @@ use primefilm::cli::Cli;
 use primefilm::report::{self, Logger};
 
 fn main() -> ExitCode {
-    // On invalid arguments `parse` prints clap's usage message and exits with code 2;
-    // `validate` adds the checks clap cannot express, with the same behavior.
+    // On invalid arguments `parse` prints clap's usage message and exits with code 2.
     let cli = Cli::parse();
-    if let Err(err) = cli.validate() {
-        err.exit();
-    }
     let log = Logger::new(cli.verbose);
     match start(&cli, &log) {
         Ok(()) => ExitCode::SUCCESS,

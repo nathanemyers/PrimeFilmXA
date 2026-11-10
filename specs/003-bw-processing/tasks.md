@@ -631,6 +631,59 @@ without rescanning.
 
 ---
 
+## Phase 11: Revision after the first real scans (2026-11-09, research P15)
+
+**Purpose**: the owner's first real HP5 frames showed outlines, flat patches and clipped
+highlights. Tones move to post-processing, outputs are TIFFs only, and dust removal is off by
+default.
+
+- [X] T060 Remove all tone balancing: in `src/tone.rs`, replace the points, blank detection and
+  tone table with `Inversion::{Linear, Density}` lookup tables; in `src/process.rs`, drop
+  `ToneLock` and tone settings. Keep only the histogram measures dust removal needs
+  (`base_density`, `densest_silver`).
+- [X] T061 Remove `--brightness`, `--contrast`, `--black`, `--white`, `--match-tones` and
+  `Cli::validate` from `src/cli.rs`, `src/lib.rs` and `src/main.rs`; trim `Profile` in
+  `src/film.rs` to `black_clip`, `margin_mm`, `opaque_range` and `dust` (default `off`).
+- [X] T062 Write each frame as `<stem>.tif` (linear master) and `<stem>-density.tif`, with the
+  settings record embedded as JSON in `ImageDescription`; remove the `.json` sidecar, the JPEG
+  share copy, `src/jpeg.rs` and the `jpeg-encoder` crate (`src/scan.rs`, `src/output.rs`,
+  `Cargo.toml`). Publish the density file first and the master last.
+- [X] T063 Update `src/report.rs` (no tone points or blank summary; resume repeats `--film` and
+  `--dust`) and `examples/process_capture.rs` (writes both inversions).
+- [X] T064 Update unit and integration tests (`tests/scan_cli.rs`, `tests/sane_test_backend.rs`,
+  `tests/hardware.rs`), the JSON schema, the CLI contract, README, spec and design notes.
+- [X] T065 ~~Choose an inversion on hardware~~: superseded by Phase 13 (both fixed inversions
+  looked flat on a real roll preview).
+
+## Phase 12: Roll preview (2026-11-09, spec User Story 7)
+
+- [X] T066 [US7] Add `roll --preview` (`src/cli.rs`, `src/lib.rs`): conflicts with
+  `--preset`, `--resolution` and `--dust`; dust forced off and not repeated when resuming.
+- [X] T067 [US7] In `src/scan.rs`, `roll_settings` gives ordinary `Full` scans at
+  `PREVIEW_DPI` (300) in 8-bit RGB with `advance_after` (the scanner's preview mode never moves
+  film); roll previews go to `<output>/previews/<roll>/` and record `preset: preview`,
+  `output.kind: preview`. The resume command adds `--preview` (`src/report.rs`).
+- [X] T068 [P] [US7] Tests: `roll_preview_uses_ordinary_low_resolution_scans_that_advance`
+  (`src/scan.rs`); roll preview files, record, resume and option conflicts
+  (`tests/scan_cli.rs`). README, spec, contract updated.
+- [ ] T069 [US7] **Hardware, owner present.** `primefilm roll --preview --roll test` on a
+  4–6 frame strip: one preview per frame in film order, about 12 s per frame, the film
+  advances and the run ends at the end of the strip. Record in `hardware-validation.md`.
+
+## Phase 13: Automatic points restored (2026-11-09, research P16)
+
+- [X] T070 Restore `TonePoints` (sources `auto`, `blank-default`), `auto_points` and a plain
+  density `tone_table` in `src/tone.rs`; drop `Inversion`. Restore the profile's `white_clip`,
+  `min_range`, `nominal_range` (`src/film.rs`) and the points step in `src/process.rs`; dust
+  removal stays off by default.
+- [X] T071 One TIFF per frame again (`src/scan.rs`): record gains `processing.points` and
+  `processing.probably_blank`, loses `output.inversion`; `SavedFile` drops `density_image`,
+  regains `probably_blank`; progress shows "probably blank". Example, tests, schema, contract,
+  README and spec docs updated.
+- [ ] T072 **Hardware, owner present.** Re-run `roll --preview` and a `web` roll on the HP5
+  strip: no outlines, flat patches or flat grey frames (SC-001). Record in
+  `hardware-validation.md`.
+
 ## Dependencies & Execution Order
 
 ### Phase dependencies

@@ -5,6 +5,21 @@
 Extends feature 002's model ([../002-film-scan/data-model.md](../002-film-scan/data-model.md)).
 Presets, roll folders, frame numbering and run outcomes are unchanged unless noted.
 
+> **Revision 2026-11-09 (research P16), superseding part of P15 below:** Tone Points are back
+> (sources `auto` and `blank-default` only) with the profile's `white_clip`, `min_range` and
+> `nominal_range`; the record's `processing` again has `points` and `probably_blank`. Each
+> frame is one `<stem>.tif`; the two-inversion comparison is gone (`output.inversion` removed).
+>
+> **Revision 2026-11-09 (research P15).** Withdrawn: Tone Points, the tone-matching state, the
+> blank-frame flag, brightness/contrast/explicit points in Processing Settings, the profile's
+> `white_clip`, `min_range` and `nominal_range`, and the share copy. Processing Settings are
+> now just `stock` and `dust` (default `off`). Each frame is saved as two positives,
+> `<stem>.tif` (inversion `linear`) and `<stem>-density.tif` (inversion `density`), and the
+> Settings Record is embedded as JSON in each TIFF's `ImageDescription` tag instead of a
+> `.json` file; `output` gains `inversion` and loses `share_copy`, `processing` loses
+> `points`, `brightness`, `contrast` and `probably_blank`. Sections below that describe
+> withdrawn items are kept for the record.
+
 ## Film Type (`FilmType`)
 
 | Variant | Meaning |

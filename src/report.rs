@@ -250,19 +250,9 @@ struct ScanReport {
     resolution_dpi: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     film: Option<FilmStock>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tone_points: Option<LockedPoints>,
     files: Vec<SavedFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     film_moved: Option<FilmMoved>,
-}
-
-/// The shared points of a `--match-tones` roll.
-#[derive(Serialize)]
-struct LockedPoints {
-    black_density: f64,
-    white_density: f64,
-    matched_from_frame: u32,
 }
 
 #[derive(Serialize)]
@@ -327,7 +317,6 @@ pub fn print_run(report: &RunReport, opts: &RunOptions, json: bool) {
             preset: report.quality.map(Quality::name),
             resolution_dpi: report.quality.map(Quality::dpi),
             film: report.film,
-            tone_points: locked_points(report),
             files: report.files.clone(),
             film_moved: match (report.kind, &report.outcome) {
                 (RunKind::Advance, Outcome::Completed(_)) => Some(FilmMoved::Advanced),
@@ -344,40 +333,13 @@ pub fn print_run(report: &RunReport, opts: &RunOptions, json: bool) {
                 println!("{}", file.image.display());
             }
         }
-        RunKind::Roll => {
-            println!("{}", roll_summary(report));
-            if let Some(line) = blank_summary(report) {
-                println!("{line}");
-            }
-        }
+        RunKind::Roll => println!("{}", roll_summary(report)),
         RunKind::Advance => {}
     }
     match &report.outcome {
         Outcome::Completed(Some(text)) | Outcome::EndOfFilm(text) => println!("{text}"),
         Outcome::Completed(None) | Outcome::Failed(_) => {}
     }
-}
-
-/// A matched roll's locked points, for JSON.
-fn locked_points(report: &RunReport) -> Option<LockedPoints> {
-    let p = report.tone_points?;
-    Some(LockedPoints {
-        black_density: p.black_density,
-        white_density: p.white_density,
-        matched_from_frame: p.matched_from_frame?,
-    })
-}
-
-/// "Probably blank: 001, 007." when any frame was probably blank.
-fn blank_summary(report: &RunReport) -> Option<String> {
-    let blank: Vec<String> = report
-        .files
-        .iter()
-        .filter(|f| f.probably_blank)
-        .filter_map(|f| f.frame)
-        .map(|n| format!("{n:03}"))
-        .collect();
-    (!blank.is_empty()).then(|| format!("Probably blank: {}.", blank.join(", ")))
 }
 
 /// "Saved 2 frames (001–002) to <folder> in 2 min 27 s."
@@ -436,13 +398,15 @@ fn outcome_text(report: &RunReport, opts: &RunOptions) -> (Option<String>, Optio
 }
 
 /// `primefilm roll --roll R --start-frame N`, repeating the quality, processing options and
-/// output folder the owner chose. A matched roll whose tones are locked continues with those
-/// points (`--black`, `--white`) so the rest of the roll matches (research P7).
+/// output folder the owner chose.
 fn resume_command(report: &RunReport, opts: &RunOptions, next: u32) -> String {
     let mut cmd = format!(
         "primefilm roll --roll {} --start-frame {next}",
         report.roll.as_deref().unwrap_or_default()
     );
+    if opts.roll_preview {
+        cmd.push_str(" --preview");
+    }
     if opts.quality_given {
         match opts.quality {
             Quality::Preset(p) => cmd.push_str(&format!(" --preset {p}")),
@@ -452,14 +416,6 @@ fn resume_command(report: &RunReport, opts: &RunOptions, next: u32) -> String {
     for flag in &opts.process_flags {
         cmd.push(' ');
         cmd.push_str(flag);
-    }
-    match report.tone_points {
-        Some(p) => cmd.push_str(&format!(
-            " --black {:.3} --white {:.3}",
-            p.black_density, p.white_density
-        )),
-        None if opts.match_tones => cmd.push_str(" --match-tones"),
-        None => {}
     }
     if opts.output_given {
         cmd.push_str(&format!(
@@ -536,10 +492,9 @@ pub fn print_presets(json: bool) {
         );
     }
     println!();
-    println!("Every full scan is saved as a 16-bit gray positive (size shown) plus a JPEG share");
-    println!("copy; presets change only the resolution. Use --resolution DPI for any other value");
-    println!("from 25 to 5000 (the scanner's sensor resolves no more than 5000 dpi across the");
-    println!("frame).");
+    println!("Every full scan is saved as 16-bit gray positives (size shown is one of them);");
+    println!("presets change only the resolution. Use --resolution DPI for any other value from");
+    println!("25 to 5000 (the scanner's sensor resolves no more than 5000 dpi across the frame).");
 }
 
 /// Print the film stocks for `primefilm films`.
@@ -609,7 +564,6 @@ mod tests {
             files: Vec::new(),
             outcome,
             next_frame: Some(3),
-            tone_points: None,
             seconds: 147.0,
         }
     }
@@ -623,8 +577,8 @@ mod tests {
             quality_given,
             process: crate::process::ProcessSettings::from_profile(FilmStock::Hp5),
             process_flags: Vec::new(),
-            match_tones: false,
             keep_capture: None,
+            roll_preview: false,
         }
     }
 
@@ -642,23 +596,18 @@ mod tests {
     }
 
     #[test]
-    fn resume_command_repeats_processing_and_locked_tones() {
-        use crate::tone::{PointSource, TonePoints};
-        let mut report = roll_report(Outcome::Failed(ScanError::Interrupted));
+    fn resume_command_repeats_processing_options() {
+        let report = roll_report(Outcome::Failed(ScanError::Interrupted));
         let mut o = opts(false, "/d", false);
-        o.process_flags = vec!["--film".into(), "hp5".into(), "--dust".into(), "off".into()];
-        o.match_tones = true;
+        o.process_flags = vec![
+            "--film".into(),
+            "hp5".into(),
+            "--dust".into(),
+            "normal".into(),
+        ];
         assert_eq!(
             resume_command(&report, &o, 3),
-            "primefilm roll --roll r --start-frame 3 --film hp5 --dust off --match-tones"
-        );
-        report.tone_points = Some(TonePoints {
-            matched_from_frame: Some(1),
-            ..TonePoints::new(0.142, 1.387, PointSource::Matched)
-        });
-        assert_eq!(
-            resume_command(&report, &o, 3),
-            "primefilm roll --roll r --start-frame 3 --film hp5 --dust off --black 0.142 --white 1.387"
+            "primefilm roll --roll r --start-frame 3 --film hp5 --dust normal"
         );
     }
 
@@ -700,7 +649,6 @@ mod tests {
             preset: Some("web"),
             resolution_dpi: Some(1800.0),
             film: None,
-            tone_points: None,
             files: Vec::new(),
             film_moved: None,
         })

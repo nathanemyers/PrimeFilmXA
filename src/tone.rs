@@ -4,6 +4,9 @@
 //! look like equal steps in the print. Each frame's densest and least dense picture areas set
 //! the white and black points; every tone step depends only on a pixel's raw value, so the
 //! whole mapping is one 65,536-entry lookup table applied to every pixel.
+//!
+//! There is no brightness, contrast or matching between frames: those are set in post
+//! (research P15, P16).
 
 use serde::Serialize;
 
@@ -30,10 +33,6 @@ pub fn raw_at(d: f64) -> f64 {
 pub enum PointSource {
     /// Measured on this frame.
     Auto,
-    /// Given with `--black` and `--white`.
-    Explicit,
-    /// Locked from an earlier frame of a `--match-tones` roll.
-    Matched,
     /// The frame is probably blank; a nominal range is used.
     BlankDefault,
 }
@@ -44,9 +43,6 @@ pub struct TonePoints {
     pub black_density: f64,
     pub white_density: f64,
     pub source: PointSource,
-    /// For `matched`: the frame the points were measured on.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matched_from_frame: Option<u32>,
 }
 
 impl TonePoints {
@@ -55,7 +51,6 @@ impl TonePoints {
             black_density,
             white_density,
             source,
-            matched_from_frame: None,
         }
     }
 }
@@ -161,17 +156,11 @@ pub fn densest_silver(hist: &Histogram, black_density: f64, profile: &Profile) -
     }
 }
 
-/// The lookup table from raw gray to positive 16-bit gray (research P4).
-///
-/// `brightness` and `contrast` are −50…+50. Black and white stay fixed whatever their values.
-pub fn tone_table(points: &TonePoints, brightness: i32, contrast: i32) -> Vec<u16> {
+/// The lookup table from raw gray to positive 16-bit gray (research P4): density mapped
+/// linearly from black to white. Black and white are the only adjustments.
+pub fn tone_table(points: &TonePoints) -> Vec<u16> {
     let black = points.black_density;
     let range = (points.white_density - black).max(1e-6);
-    // Contrast: an S-curve t^a / (t^a + (1−t)^a). a > 1 steepens the midtones, a < 1 flattens
-    // them; t = 0 and t = 1 map to themselves.
-    let a = 2f64.powf(f64::from(contrast) / 50.0);
-    // Brightness: t^g with g < 1 lifting the midtones.
-    let g = 2f64.powf(-f64::from(brightness) / 50.0);
     // Build the table with an iterator: one entry for every possible raw value, collected
     // into a `Vec`. Indexing it with a pixel's raw value gives that pixel's output.
     // Floating-point results can differ between machines in the last bit, but on one machine
@@ -179,12 +168,7 @@ pub fn tone_table(points: &TonePoints, brightness: i32, contrast: i32) -> Vec<u1
     // and settings always give the same positive (spec FR-007).
     (0..=u16::MAX)
         .map(|raw| {
-            let mut t = ((density(raw) - black) / range).clamp(0.0, 1.0);
-            if t > 0.0 && t < 1.0 {
-                let ta = t.powf(a);
-                t = ta / (ta + (1.0 - t).powf(a));
-                t = t.powf(g);
-            }
+            let t = ((density(raw) - black) / range).clamp(0.0, 1.0);
             // `t` is in 0..=1, so the product fits a u16 after rounding.
             (t * FULL).round() as u16
         })
@@ -296,7 +280,7 @@ mod tests {
     #[test]
     fn table_reverses_and_anchors() {
         let p = TonePoints::new(0.2, 1.4, PointSource::Auto);
-        let table = tone_table(&p, 0, 0);
+        let table = tone_table(&p);
         assert_eq!(table.len(), 65536);
         // Denser negative (lower raw value) gives a lighter positive.
         assert!(table.windows(2).all(|w| w[0] >= w[1]));
@@ -309,20 +293,8 @@ mod tests {
     }
 
     #[test]
-    fn brightness_and_contrast_keep_the_ends() {
+    fn table_is_deterministic() {
         let p = TonePoints::new(0.2, 1.4, PointSource::Auto);
-        let plain = tone_table(&p, 0, 0);
-        let bright = tone_table(&p, 30, 0);
-        let hard = tone_table(&p, 0, 30);
-        let at = |table: &[u16], d: f64| table[usize::from(raw(d))];
-        assert!(at(&bright, 0.8) > at(&plain, 0.8));
-        // Quarter and three-quarter points: contrast pushes them apart.
-        assert!(at(&hard, 0.5) < at(&plain, 0.5));
-        assert!(at(&hard, 1.1) > at(&plain, 1.1));
-        for table in [&bright, &hard] {
-            assert_eq!(at(table, 0.2), 0);
-            assert_eq!(at(table, 1.4), 65535);
-        }
-        assert_eq!(tone_table(&p, 30, 30), tone_table(&p, 30, 30));
+        assert_eq!(tone_table(&p), tone_table(&p));
     }
 }

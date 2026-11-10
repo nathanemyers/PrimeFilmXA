@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/nathanemyers/PrimeFilmXA/specs/003-bw-processing/scan-output.schema.json",
   "title": "primefilm --json output for scan, roll, preview, advance, presets and films (schema_version 2)",
-  "description": "Every scan, roll, preview, advance and presets run prints one document of this shape. Failures before scanning starts (busy, not found, ...) carry only schema_version, outcome, message and next_step, like feature 001's failure document. Version 2 (feature 003): saved frames are processed positives; files gain share_copy, film, probably_blank and dust_repaired; runs gain film and, for matched rolls, tone_points; the films command lists film stocks.",
+  "description": "Every scan, roll, preview, advance and presets run prints one document of this shape. Failures before scanning starts (busy, not found, ...) carry only schema_version, outcome, message and next_step, like feature 001's failure document. Version 2 (feature 003): saved frames are processed (tone-balanced) positives, one TIFF per frame with the settings record embedded instead of a sidecar; runs gain film; the films command lists film stocks.",
   "type": "object",
   "required": [
     "schema_version",
@@ -74,32 +74,6 @@
     "film": {
       "$ref": "#/$defs/stock_value"
     },
-    "tone_points": {
-      "type": "object",
-      "required": [
-        "black_density",
-        "white_density",
-        "matched_from_frame"
-      ],
-      "description": "Present for roll --match-tones once the points are locked; reused in the resume command",
-      "properties": {
-        "black_density": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 4
-        },
-        "white_density": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 4
-        },
-        "matched_from_frame": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 999
-        }
-      }
-    },
     "films": {
       "type": "array",
       "items": {
@@ -112,7 +86,6 @@
       "type": "object",
       "required": [
         "image",
-        "settings",
         "width",
         "height",
         "channels",
@@ -131,10 +104,8 @@
           "description": "Absent for previews"
         },
         "image": {
-          "type": "string"
-        },
-        "settings": {
-          "type": "string"
+          "type": "string",
+          "description": "The positive (<stem>.tif); the settings record is in its ImageDescription tag"
         },
         "width": {
           "type": "integer",
@@ -163,19 +134,15 @@
             "none"
           ]
         },
-        "share_copy": {
-          "type": "string",
-          "description": "8-bit JPEG share copy; absent for previews"
-        },
         "film": {
           "$ref": "#/$defs/stock_value"
-        },
-        "probably_blank": {
-          "type": "boolean"
         },
         "dust_repaired": {
           "type": "integer",
           "minimum": 0
+        },
+        "probably_blank": {
+          "type": "boolean"
         }
       }
     },

@@ -11,34 +11,44 @@ and FP4, although the difference in terms of post processing should be minimal i
 want to reverse the negative so that it looks normal. Later I will add post processing for
 color film which may be more complicated."
 
+**Revision (2026-11-09, after the first real scans)**: some processed frames were ruined
+(outlines, flat patches, clipped highlights). The same frames look the same in VueScan, so the
+damage is on the negatives (research P17). Dust removal is off by default until it has been
+tested on real captures. Positives
+keep the automatic per-frame black and white points, mapped in density, but there is no
+brightness, contrast, explicit points or tone matching: tones are finished in post. Each frame
+is one TIFF; the JPEG share copy and the JSON sidecar are dropped, and the settings record is
+embedded in the TIFF. User Stories 4 and 5 are withdrawn. The requirements below are the
+revised ones; see Clarifications.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Scan a B&W frame straight to a positive (Priority: P1)
 
 The owner loads a black-and-white negative, names the film it was shot on (HP5 or FP4), and
-scans a single frame. Instead of a raw negative, they get a grayscale image that looks like a
-normal black-and-white photograph: tones reversed, the clear film base rendered as black, the
-densest highlights as white, a full natural tonal range, no color tint. They also get a smaller
-copy ready to share. The raw negative is never kept; the owner only wants the finished picture.
+scans a single frame. Instead of a raw negative, they get a 16-bit grayscale positive: tones
+reversed, no color tint, nothing clipped or stretched, ready for levels and curves in post
+*(revised; originally a finished, tone-balanced picture plus a share copy)*. The raw negative
+is never kept.
 
 **Why this priority**: this is the whole point of the feature. Every scan of a negative
 otherwise needs manual work in another program before it can be looked at or shared.
 
-**Independent Test**: load a B&W strip, scan one frame naming the stock, and confirm a positive
-and a share copy appear, both open in an ordinary image viewer and look like a normal
-photograph, and no raw negative file is left on disk.
+**Independent Test**: load a B&W strip, scan one frame naming the stock, and confirm the two
+positive TIFFs appear, open in an ordinary image viewer as reversed images of the frame, and no
+raw negative file is left on disk.
 
 **Acceptance Scenarios**:
 
 1. **Given** a B&W negative is loaded, **When** the owner scans a single frame, **Then** a
-   full-quality grayscale positive and a share copy of that frame are saved, dark areas of the
-   negative rendered light and light areas dark, and no raw scan is saved.
+   full-quality grayscale positive of that frame is saved, dark areas of the negative
+   rendered light and light areas dark, and no raw scan is saved.
 2. **Given** a positive is saved, **When** the owner inspects it, **Then** it uses close to the
    full tonal range (deep blacks and clean whites without large areas clipped) and shows no tint.
-3. **Given** a positive is saved, **When** the owner reads its recorded settings, **Then** they
-   include the film stock, the capture settings (preset, resolution, scanner, roll, frame,
-   timestamp) and every processing setting used, including the automatically chosen black and
-   white points.
+3. **Given** a positive is saved, **When** the owner reads the settings recorded inside it,
+   **Then** they include the film stock, the capture settings (preset, resolution, scanner,
+   roll, frame, timestamp) and every processing setting used, including the automatically
+   chosen black and white points.
 4. **Given** a positive for that frame already exists, **When** the owner scans the frame again,
    **Then** the existing files are left untouched and the new ones are saved under clearly
    related names (feature 002's no-overwrite rule).
@@ -74,6 +84,9 @@ copy per frame, numbered in film order, with no raw negatives left on disk.
 
 ### User Story 3 - Remove dust and specks (Priority: P2)
 
+*Revised 2026-11-09: off by default until tested and tuned on real captures; available with
+`--dust` (research P17).*
+
 Dust and lint on the film block light, so they show up as small white specks and hairs on the
 positive. The owner wants these cleaned up automatically, without the picture being softened or
 real small bright details (stars, catchlights, street lights) being erased.
@@ -98,7 +111,9 @@ settings record that dust removal was applied.
 
 ---
 
-### User Story 4 - Adjust the tones of a frame (Priority: P2)
+### User Story 4 - Adjust the tones of a frame (Priority: P2) — WITHDRAWN 2026-11-09
+
+*Withdrawn: the owner sets tones in post-processing. Kept for the record.*
 
 Most frames come out well automatically, but some (a dark interior, a lot of sky, a badly
 exposed frame) need a nudge. Because the raw negative is not kept, the owner rescans that frame
@@ -123,7 +138,9 @@ settings.
 
 ---
 
-### User Story 5 - Matching tones across a roll (Priority: P3)
+### User Story 5 - Matching tones across a roll (Priority: P3) — WITHDRAWN 2026-11-09
+
+*Withdrawn: the owner sets tones in post-processing. Kept for the record.*
 
 When frames on a roll were shot in the same light (a series, portraits in one session), the
 owner wants them to match rather than each being auto-adjusted on its own. Per-frame tones stay
@@ -163,6 +180,27 @@ positive and is still kept apart from archive files.
 
 ---
 
+### User Story 7 - Preview a whole roll (Priority: P3) — added 2026-11-09
+
+The owner runs through a whole strip at preview speed to see what is on it before committing
+to full scans. Each frame is scanned at preview resolution and the film advances, as in a roll
+scan. *(Feature 002 left roll previews out of scope; the owner asked for this.)*
+
+**Independent Test**: run `roll --preview` on a 4–6 frame strip and confirm one 8-bit preview
+per frame (both inversions) in `previews/<roll>/`, in film order, at about the single-preview
+time per frame, and nothing in the roll's archive folder.
+
+**Acceptance Scenarios**:
+
+1. **Given** a strip of N frames, **When** the owner runs a roll preview, **Then** N previews
+   are saved in `previews/<roll>/`, numbered 1 to N, and the run ends at the end of the film.
+2. **Given** a roll preview stops early, **When** the owner runs the printed resume command,
+   **Then** it continues as a roll preview.
+3. **Given** a quality preset, resolution or dust level is given with `--preview`, **Then** the
+   tool exits with a usage error before touching the scanner.
+
+---
+
 ### Edge Cases
 
 - The scan includes clear film base or frame gap at the edges: these become black in the
@@ -192,34 +230,34 @@ positive and is still kept apart from archive files.
 
 ### Functional Requirements
 
+*Revised 2026-11-09. Former FR-005 and FR-006 (brightness and contrast, explicit points, tone
+matching) and FR-016 (share copy) are withdrawn.*
+
 **Conversion**
 
-- **FR-001**: Single-frame scans, roll scans and previews of B&W film MUST produce a processed
-  positive as their output, processing each frame as soon as it is captured.
+- **FR-001**: Single-frame scans, roll scans and previews of B&W film MUST produce processed
+  positives as their output, processing each frame as soon as it is captured.
 - **FR-002**: The positive MUST be grayscale with tones reversed: clear film base renders black,
-  the densest parts of the negative render white.
-- **FR-003**: The conversion MUST remove the scanner's color cast and produce neutral gray with
-  no tint, combining the color channels; the infrared channel is not used for the image.
+  the densest parts of the negative render white, density mapped evenly in between.
+- **FR-003**: The conversion MUST produce neutral gray with no tint, combining the color
+  channels; the infrared channel is not used for the image.
 - **FR-004**: Black and white points MUST be set automatically per frame from the picture area,
-  ignoring film base and frame gap at the edges, and not letting very small extreme areas decide
-  them alone.
-- **FR-005**: The owner MAY adjust brightness (midtones) and contrast within documented ranges,
-  and MAY set black and white points explicitly instead of automatically.
-- **FR-006**: A roll scan MUST offer an option to match tones across the roll: values set from
-  the first non-blank frame, or given explicitly by the owner, and applied to every frame.
-- **FR-007**: The same captured image processed with the same settings MUST produce an identical
-  positive every time.
+  ignoring film base and frame gap at the edges, and not letting very small extreme areas
+  decide them alone. A frame with almost no tonal range is flagged "probably blank" and not
+  stretched. There are no other tone adjustments.
+- **FR-007**: The same captured image processed with the same settings MUST produce identical
+  positives every time.
 
 **Dust removal**
 
-- **FR-008**: Processing MUST remove dust specks and hairs by default, filling each with tones
-  matched to its surroundings and leaving every other pixel unchanged. For B&W film this MUST
-  work from the image itself, because the infrared channel shows the silver image as well as the
-  dust and cannot tell them apart.
-- **FR-009**: The owner MUST be able to turn dust removal off and choose its strength from a
-  small documented range (gentle to aggressive).
-- **FR-010**: Dust removal MUST NOT blur or soften areas without dust, and at the default
-  strength MUST keep small genuine bright details such as stars and catchlights.
+- **FR-008**: Processing MUST be able to remove dust specks and hairs, filling each with tones
+  matched to its surroundings and leaving every other pixel unchanged. It is off by default.
+  For B&W film it works from the image itself, because the infrared channel shows the silver
+  image as well as the dust.
+- **FR-009**: The owner MUST be able to choose dust removal's strength from a small documented
+  range (off, gentle, normal, strong).
+- **FR-010**: Dust removal MUST NOT blur or soften areas without dust, and at `normal` MUST
+  keep small genuine bright details such as stars and catchlights.
 
 **Film stocks and types**
 
@@ -229,37 +267,35 @@ positive and is still kept apart from archive files.
 - **FR-012**: Each stock MUST have its own processing profile, even though HP5 and FP4 start out
   identical, so one can be tuned later without affecting the others.
 - **FR-013**: Processing MUST be organized by film type (B&W negative now) so a color negative
-  type, including infrared-based dust removal for color film, can be added later without
-  changing B&W behavior. Naming a color stock today MUST give a clear "not supported yet" usage
-  error.
+  type can be added later without changing B&W behavior. Naming a color stock today MUST give a
+  clear "not supported yet" usage error.
 
 **Output and archival fidelity**
 
 - **FR-014**: Raw negative scans MUST NOT be saved. Any temporary data used while processing a
   frame MUST be removed when the frame is done or the run ends, on every exit path.
-- **FR-015**: Each frame MUST be saved as a full-resolution, lossless grayscale positive with at
-  least 16 bits per pixel; this is the archive master.
-- **FR-016**: Each frame MUST also be saved as a full-resolution 8-bit share copy in a widely
-  supported compressed image format, clearly distinguished from the master by name or location.
-- **FR-017**: Every master MUST record the capture settings (preset, resolution, bit depth,
-  scanner identity, roll name, frame number, timestamp), the film stock, every processing
-  setting actually used (including automatic black and white points and dust removal), and the
-  tool version.
+- **FR-015**: Each positive MUST be full resolution, lossless, grayscale, with at least 16 bits
+  per pixel; the linear one is the archive master.
+- **FR-017**: Every positive MUST carry, embedded in the file, the capture settings (preset,
+  resolution, bit depth, scanner identity, roll name, frame number, timestamp, exposure and
+  every other scanner option), the film stock, the inversion, every processing setting used,
+  and the tool version. No sidecar files are written.
 - **FR-018**: Files MUST follow feature 002's naming, folder, no-overwrite and
-  never-look-complete-when-incomplete rules. A frame counts as saved only when both its master
-  and share copy are complete.
-- **FR-019**: Previews MUST stay separate from masters and share copies (feature 002, FR-012).
+  never-look-complete-when-incomplete rules. A frame counts as saved only when both its
+  positives are complete; the master is published last.
+- **FR-019**: Previews MUST stay separate from archive files (feature 002, FR-012).
 
 **Interface**
 
-- **FR-020**: Film stock, tone adjustments, tone matching and dust removal settings MUST be
-  non-interactive command-line options on the scan and preview commands, validated before the
-  scanner or film is touched.
+- **FR-020**: Film stock and dust removal settings MUST be non-interactive command-line options
+  on the scan commands, validated before the scanner or film is touched.
 - **FR-021**: Progress, end-of-run summary and machine-readable output (feature 002, FR-019 and
-  FR-020) MUST list both files written per frame and flag frames that are probably blank.
-- **FR-022**: All processing (inversion, tones, dust removal, tone matching, film-stock
-  handling) MUST be verifiable by automated checks using synthetic or recorded captures, with no
-  scanner attached.
+  FR-020) MUST list both files written per frame.
+- **FR-023**: `roll --preview` MUST scan every frame of a roll at preview resolution (300 dpi,
+  8-bit), advancing the film like a roll scan, and save the previews in `previews/<roll>/`,
+  apart from archival scans. It MUST reject `--preset`, `--resolution` and `--dust`.
+- **FR-022**: All processing (inversion, dust removal, film-stock handling) MUST be verifiable
+  by automated checks using synthetic or recorded captures, with no scanner attached.
 
 ### Key Entities
 
@@ -279,9 +315,12 @@ positive and is still kept apart from archive files.
 
 ### Measurable Outcomes
 
-- **SC-001**: On the owner's own HP5 and FP4 rolls, at least 9 out of 10 frames scanned with
-  automatic settings look like a correctly exposed normal photograph to the owner, with no
-  manual adjustment.
+*Revised 2026-11-09: former SC-008 (matched tones) is withdrawn.*
+
+- **SC-001**: On the owner's own HP5 and FP4 rolls, with dust removal off, no frame shows an
+  artifact the same frame does not show in VueScan, and at least 9 out of 10 frames need no
+  more than ordinary finishing in post.
+
 - **SC-002**: At the default preset, a roll scan with processing takes no more than 20% longer
   than the same roll scan took without processing in feature 002.
 - **SC-003**: At the default preset, a 36-frame roll uses no more than one third of the disk
@@ -291,13 +330,11 @@ positive and is still kept apart from archive files.
   white.
 - **SC-005**: On a synthetic frame with 50 added dust specks, at least 95% are removed and no
   pixel more than a few pixels from a speck is changed; on a synthetic star field, at least 95%
-  of the stars survive at the default strength.
-- **SC-006**: On the owner's own rolls, at least 9 out of 10 frames need no further dust
-  spotting by hand.
+  of the stars survive at `normal`.
+- **SC-006**: Once tuned (research E11), dust removal leaves no visible artifacts on the
+  owner's own HP5 and FP4 frames.
 - **SC-007**: After any run, including failed and interrupted ones, no raw negative or temporary
-  file is left on disk, and every master and share copy that exists is complete.
-- **SC-008**: With tone matching on, every frame of a roll records identical black and white
-  points.
+  file is left on disk, and every positive that exists is complete.
 - **SC-009**: All processing behavior is verified by automated checks that pass with no scanner
   attached.
 
@@ -324,6 +361,27 @@ positive and is still kept apart from archive files.
 - Q: Tones per frame or per roll? → A: Per frame by default, with an option to match tones
   across a roll.
 - Q: Share-ready copy? → A: Always save an 8-bit compressed copy alongside the 16-bit master.
+  *(Superseded below.)*
+
+### Session 2026-11-09 (after the first real scans)
+
+- Q: Some real frames were ruined (outlines, flat patches, clipped highlights). What changes?
+  → A: Remove all tone balancing; tones are set in post. Drop the JSON sidecar and the JPEG;
+  keep only TIFFs. (The settings record moves inside each TIFF, as constitution Principle I
+  requires a record.)
+- Q: What about dust removal, the likely cause of the outlines (dense highlights taken for
+  dust)? → A: Off by default until tuned on real captures; still available with `--dust`.
+- Q: How should the negative be reversed without tone balancing? → A: Write both a linear and
+  a density inversion for every frame for now; the owner will pick one.
+- Q: Both fixed inversions (linear, density) looked bad on a real roll preview; the old
+  processing worked better. → A: Restore the automatic black and white points as the only
+  output, with dust removal still off by default (research P16). Brightness, contrast,
+  explicit points and tone matching stay removed.
+- Q: Were the artifacts caused by the tool? → A: No. The owner saw the same outlines and flat
+  patches in VueScan, so they are on the developed negatives (research P17).
+- Q: Can a whole roll be previewed? → A: Yes, `roll --preview` (User Story 7, FR-023). The
+  scanner's preview mode cannot move film, so each frame is an ordinary 300 dpi scan, which
+  002 experiment E6 measured at the same ~12 s as a preview.
 
 ## Assumptions
 

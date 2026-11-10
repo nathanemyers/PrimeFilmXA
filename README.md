@@ -11,13 +11,13 @@ Current features:
   the ones that matter for film (resolutions, color modes, bit depths, scan area, infrared).
 - `primefilm scan`, `roll`, `preview`, `advance` and `presets` scan film: one frame, a whole
   strip, a quick preview, or just move the film on (see [Scanning](#scanning)).
-- Black-and-white negatives come out as finished positives: inverted, toned and cleaned of
-  dust (see [Black-and-white processing](#black-and-white-processing)); `primefilm films`
+- Black-and-white negatives come out as positives with automatic black and white points,
+  ready for finishing in post (see [Black-and-white processing](#black-and-white-processing)); `primefilm films`
   lists the film stocks.
 
-Every frame is saved as a 16-bit gray positive (the archive master), a JPEG copy ready to
-share, and a JSON record of every capture and processing setting. The raw negative is not
-kept, and no existing file is ever replaced. Color film is not supported yet.
+Every frame is saved as 16-bit gray positive TIFFs, with every capture setting recorded inside
+each file. The raw negative is not kept, and no existing file is ever replaced. Color film is
+not supported yet.
 
 ## Prerequisites
 
@@ -79,6 +79,7 @@ it with the scanner's own button; the tool never ejects.
 | `primefilm preview` | Quick 300 dpi look at the frame in the scanner (about 12 s), saved to `previews/` | stays put |
 | `primefilm scan` | Scan the frame in the scanner once | stays put |
 | `primefilm roll` | Scan, advance, repeat until the end of the strip | moves one frame after each scan |
+| `primefilm roll --preview` | The same at preview speed (300 dpi, about 12 s a frame), saved to `previews/<roll>/` | moves one frame after each scan |
 | `primefilm advance` | Move the film on one frame, saving nothing (about 30 s) | moves one frame |
 | `primefilm presets` | List the quality presets | – |
 | `primefilm films` | List the film stocks | – |
@@ -88,9 +89,9 @@ primefilm roll --roll hp5-01 --film hp5
 ```
 
 ```text
-Roll hp5-01 → /home/you/Pictures/primefilm/hp5-01 (preset standard, 3600 dpi, Ilford HP5 Plus, dust normal)
+Roll hp5-01 → /home/you/Pictures/primefilm/hp5-01 (preset standard, 3600 dpi, Ilford HP5 Plus, dust off)
 Frame 001: scanning…
-Frame 001: 12 dust specks removed; saved hp5-01-001.tif + .jpg (5173 × 3443, gray 16-bit) in 92 s; advancing film
+Frame 001: saved hp5-01-001.tif (5173 × 3443, gray 16-bit) in 92 s; advancing film
 …
 Frame 006: same as the previous frame; end of film.
 Saved 5 frames (001–005) to /home/you/Pictures/primefilm/hp5-01 in 9 min 10 s.
@@ -101,10 +102,16 @@ The PrimeFilm XA does not report the end of the strip; it just stays on the last
 tool scans until a frame matches the one before it (or shows no film), and discards that
 repeat. Use `--frames N` to stop after N frames.
 
+`primefilm roll --preview --roll hp5-01` runs through the whole strip at preview speed, to see
+what is on it before committing to full scans. The 8-bit previews go to
+`previews/hp5-01/hp5-01-001.tif`, …, never into the roll's archive folder.
+It takes no `--preset`, `--resolution` or `--dust`. Reload the strip afterwards to scan it for
+real.
+
 **Presets** change only the resolution (`--preset web|standard|high`, or
 `--resolution DPI` for anything from 25 to 5000):
 
-| Preset | dpi | Pixels | Positive | Time per frame |
+| Preset | dpi | Pixels | Each positive | Time per frame |
 |--------|-----|--------|----------|----------------|
 | `web` | 1800 | 2586 × 1721 | 9 MB | 49 s |
 | `standard` (default) | 3600 | 5173 × 3443 | 36 MB | 91 s |
@@ -113,19 +120,19 @@ repeat. Use `--frames N` to stop after N frames.
 There is no higher setting: the scanner advertises 10000 dpi, but its sensor resolves at most
 5000 dpi across the frame, and above that the images come out stretched.
 
-The JPEG share copy adds roughly a tenth to each positive, so a 36-frame roll at `standard` is
-about 1.5 GB. The scanner driver also holds each raw frame in `/tmp` while scanning (275 MB at
+A 36-frame roll at `standard` is about 1.3 GB. The scanner driver also holds each raw frame in `/tmp` while scanning (275 MB at
 `high`), so keep some space free there.
 
 **Files** go to `$HOME/Pictures/primefilm/` (change with `--output DIR`):
 
 ```text
-<roll>/<roll>-001.tif     the positive: 16-bit gray, uncompressed, full resolution (the archive)
-<roll>/<roll>-001.jpg     the share copy: 8-bit gray JPEG, full resolution
-<roll>/<roll>-001.json    every setting: capture (preset, resolution, exposure, gain, scanner,
-                          time) and processing (film, black and white points, dust removal)
-previews/preview-20261109-120248.tif   (8-bit gray positive, not archival)
+<roll>/<roll>-001.tif                  the positive: 16-bit gray, uncompressed, full resolution
+previews/preview-20261109-120248.tif   8-bit gray positive, not archival
 ```
+
+Each TIFF carries every setting used (preset, resolution, exposure, gain, scanner, time, film,
+dust removal) as JSON in its `ImageDescription` tag, e.g. `tiffinfo <file>`; there are no
+sidecar files.
 
 `--roll` defaults to today's date. Frame numbers continue from the highest one already in the
 roll's folder, so a second `scan` or a resumed `roll` just keeps counting; `--frame N` /
@@ -152,28 +159,18 @@ Each frame is turned into a positive as soon as it is scanned:
 1. The red, green and blue channels are averaged into one gray image. Silver is neutral, so
    all three hold the same picture, and any color cast disappears.
 2. Black and white points are set from the picture (ignoring a 2 mm border): the clear film
-   base becomes black and the densest highlights white. A frame with almost no tonal range is
-   reported as "probably blank" instead of being stretched into grain.
-3. Dust is removed. Dust is opaque, so it is denser than any silver on the frame; small specks
-   and hairs that dense are filled in from their surroundings, and nothing else is touched.
-   Stars and catchlights are silver, so they are kept. (Infrared dust removal does not work on
-   B&W film: silver blocks infrared just as dust does.)
-4. Tones are mapped through one curve, in film density, with your brightness and contrast.
+   base becomes black and the densest highlights white, with density mapped evenly in between.
+   A frame with almost no tonal range is reported as "probably blank" instead of being
+   stretched into grain. There are no brightness or contrast settings; finish in post.
+3. Dust removal, only if asked for (`--dust`, off by default). Dust is opaque, so it should be
+   denser than any silver on the frame; small specks and hairs that dense are filled in from
+   their surroundings. It is off by default until it has been tested and tuned on real HP5 and
+   FP4 captures.
 
 | Option | Commands | What it does |
 |--------|----------|--------------|
 | `--film bw\|hp5\|fp4` | scan, roll, preview | The film stock (default `bw`, any B&W negative); recorded with each frame |
-| `--brightness N` | scan, roll, preview | −50 to 50: lighter (+) or darker (−) midtones; black and white stay put |
-| `--contrast N` | scan, roll, preview | −50 to 50: more (+) or less (−) midtone contrast |
-| `--black D --white D` | scan, roll, preview | Fixed densities for black and white instead of automatic ones |
-| `--dust off\|gentle\|normal\|strong` | scan, roll | Dust removal strength (default `normal`) |
-| `--match-tones` | roll | Every frame uses the tones of the first frame that is not blank, so a series matches |
-
-Because the raw negative is not kept, a frame that comes out wrong is fixed by rescanning it,
-e.g. `primefilm scan --roll hp5-01 --frame 7 --film hp5 --brightness 20` (saved as
-`hp5-01-007-2.*`, next to the first try). If a `--match-tones` roll is interrupted, the resume
-command it prints carries the locked `--black` and `--white` values so the rest of the roll
-still matches.
+| `--dust off\|gentle\|normal\|strong` | scan, roll | Dust removal strength (default `off`) |
 
 HP5 and FP4 currently share one processing profile; each has its own entry in
 [src/film.rs](src/film.rs) so it can be tuned separately.
@@ -304,26 +301,25 @@ appears.
 13. [src/gray.rs](src/gray.rs): the in-memory gray frame. A flat `Vec<u16>` as a 2-D image,
     `chunks_exact`, checked conversions.
 14. [src/tone.rs](src/tone.rs): density, the histogram, black and white points, and the tone
-    lookup table. Floating-point maths, running totals, tables built from iterators.
+    lookup table. Floating-point maths, running totals, tables built from
+    iterators.
 15. [src/dust.rs](src/dust.rs): dust removal. A flood fill with an explicit stack,
     `saturating_sub` at the edges.
-16. [src/process.rs](src/process.rs): the per-frame pipeline and `--match-tones`.
-17. [src/jpeg.rs](src/jpeg.rs): the share copy, through the `jpeg-encoder` crate. Using a
-    third-party API, `map_err`.
-18. [src/scan.rs](src/scan.rs): the `scan`, `roll`, `preview` and `advance` sequences, written
+16. [src/process.rs](src/process.rs): the per-frame processing.
+17. [src/scan.rs](src/scan.rs): the `scan`, `roll`, `preview` and `advance` sequences, written
     once against the backend traits. Reused buffers, `Option` defaults.
-19. [src/main.rs](src/main.rs): the binary: SANE config, Ctrl-C handling, exit codes. `Arc` and
+18. [src/main.rs](src/main.rs): the binary: SANE config, Ctrl-C handling, exit codes. `Arc` and
    atomics.
-20. [src/usb.rs](src/usb.rs): reads `/sys` to tell "off" from "busy" from "no permission".
-21. [src/backend/sane/ffi.rs](src/backend/sane/ffi.rs): raw C declarations from `sane.h`. FFI,
+19. [src/usb.rs](src/usb.rs): reads `/sys` to tell "off" from "busy" from "no permission".
+20. [src/backend/sane/ffi.rs](src/backend/sane/ffi.rs): raw C declarations from `sane.h`. FFI,
     `#[repr(C)]`, raw pointers.
-22. [src/backend/sane/config.rs](src/backend/sane/config.rs): writes the pieusb-only SANE config.
-23. [src/backend/sane/mod.rs](src/backend/sane/mod.rs): the safe wrapper (`Sane`, `Device`),
+21. [src/backend/sane/config.rs](src/backend/sane/config.rs): writes the pieusb-only SANE config.
+22. [src/backend/sane/mod.rs](src/backend/sane/mod.rs): the safe wrapper (`Sane`, `Device`),
     `SaneBackend` and `SaneSession`. `unsafe` and `// SAFETY:`, `Drop` and drop order, moving
     ownership.
-24. [examples/process_capture.rs](examples/process_capture.rs): replays a raw capture kept with
+23. [examples/process_capture.rs](examples/process_capture.rs): replays a raw capture kept with
     the hidden `--keep-capture DIR` flag through the processing, for tuning. Examples.
-25. [tests/](tests/): integration tests that run the real binary.
+24. [tests/](tests/): integration tests that run the real binary.
 
 Design notes, decisions and hardware findings are in
 [specs/001-scanner-detect/](specs/001-scanner-detect/),

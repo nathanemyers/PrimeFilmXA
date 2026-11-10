@@ -4,7 +4,7 @@
 //! same code drives the real scanner, SANE's test backend and the simulated film strip.
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -19,10 +19,9 @@ use crate::error::{ScanError, frame_text};
 use crate::film::{DustConstants, DustLevel, FilmStock, Profile};
 use crate::frame_stats::{Fingerprint, FrameStats};
 use crate::gray::{GrayFrame, to_8bit};
-use crate::jpeg;
 use crate::output::{self, MAX_FRAME, PartialFile, RollFolder};
 use crate::preset::{MIN_DPI, Quality, SCAN_AREA_MM};
-use crate::process::{self, ProcessSettings, ProcessedFrame, ToneLock};
+use crate::process::{self, ProcessSettings, ProcessedFrame};
 use crate::report::Logger;
 use crate::tiff::{TiffLayout, TiffWriter};
 use crate::tone::TonePoints;
@@ -31,14 +30,19 @@ use crate::tone::TonePoints;
 /// of every frame, so the reading itself does not grow with the frame size.
 const READ_CHUNK: usize = 1 << 20;
 
-/// Version of the settings record (`.json` sidecar) format. 2: capture plus processing
-/// (feature 003, data-model "Settings Record").
+/// Version of the settings record, embedded as JSON in each TIFF's `ImageDescription` tag.
+/// 2: capture plus processing, no sidecar file (feature 003, data-model "Settings Record").
 const RECORD_VERSION: u32 = 2;
 
 /// Capture format for full B&W scans. Infrared is useless on silver film; experiment E9
 /// (research P3) decides whether RGB 16-bit is faster than RGBI. Until it has run on the
 /// scanner, RGBI is kept and its infrared samples are ignored.
 const BW_CAPTURE: ColorFormat = ColorFormat::Rgbi16;
+
+/// Resolution of previews, including roll previews. An ordinary 300 dpi scan takes the same
+/// 12 s as the scanner's own preview mode (002 experiment E6), and unlike preview mode it can
+/// move the film on afterwards.
+const PREVIEW_DPI: f64 = 300.0;
 
 /// Choices shared by the scanning commands.
 #[derive(Debug, Clone)]
@@ -58,10 +62,10 @@ pub struct RunOptions {
     /// The processing options the owner gave, as command-line words, repeated in resume
     /// commands (e.g. `["--film", "hp5"]`).
     pub process_flags: Vec<String>,
-    /// `roll --match-tones`.
-    pub match_tones: bool,
     /// Hidden `--keep-capture DIR`: also save each raw capture there (research P12).
     pub keep_capture: Option<PathBuf>,
+    /// `roll --preview`: scan the roll at preview speed, saving preview images.
+    pub roll_preview: bool,
 }
 
 /// Which command produced a [`RunReport`].
@@ -81,18 +85,14 @@ pub enum FilmMoved {
     None,
 }
 
-/// One frame saved by a run: its master, share copy and settings record.
+/// One frame saved by a run.
 #[derive(Debug, Clone, Serialize)]
 pub struct SavedFile {
     /// Absent for previews.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<u32>,
-    /// The positive master (16-bit gray; previews 8-bit).
+    /// The positive (16-bit gray; previews 8-bit).
     pub image: PathBuf,
-    /// The 8-bit JPEG share copy; absent for previews.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub share_copy: Option<PathBuf>,
-    pub settings: PathBuf,
     pub width: u32,
     pub height: u32,
     /// Always "Gray".
@@ -131,8 +131,6 @@ pub struct RunReport {
     pub outcome: Outcome,
     /// For rolls: the frame number to resume with.
     pub next_frame: Option<u32>,
-    /// For `--match-tones` rolls, once locked: the shared points.
-    pub tone_points: Option<TonePoints>,
     /// Total time from opening the scanner to the end of the run.
     pub seconds: f64,
 }
@@ -148,14 +146,14 @@ impl RunReport {
             files: Vec::new(),
             outcome: Outcome::Completed(None),
             next_frame: None,
-            tone_points: None,
             seconds: 0.0,
         }
     }
 }
 
-/// The settings record saved next to every image as `<name>.json` (research D10, data-model
-/// "Settings Record"). The top-level fields describe the capture.
+/// The settings record embedded in every image's `ImageDescription` tag (research D10,
+/// data-model "Settings Record"). There is no sidecar file: the record travels with the image,
+/// as constitution Principle I requires. The top-level fields describe the capture.
 #[derive(Debug, Serialize)]
 pub struct ScanRecord {
     pub record_version: u32,
@@ -184,7 +182,7 @@ pub struct ScanRecord {
     pub advance_requested: bool,
     /// Every scanner option as read after the capture, including exposure, gain and offset.
     pub options: Vec<Capability>,
-    /// The files made from the capture.
+    /// The image this record is embedded in.
     pub output: OutputRecord,
     /// How the capture was turned into a positive.
     pub processing: ProcessingRecord,
@@ -196,9 +194,6 @@ pub struct OutputRecord {
     pub kind: &'static str,
     pub channels: &'static str,
     pub bits_per_sample: u16,
-    pub encoding: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub share_copy: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -207,10 +202,8 @@ pub struct ProcessingRecord {
     pub film_stock: FilmStock,
     pub profile: Profile,
     pub points: TonePoints,
-    pub brightness: i32,
-    pub contrast: i32,
-    pub dust: DustRecord,
     pub probably_blank: bool,
+    pub dust: DustRecord,
     pub seconds: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kept_capture: Option<PathBuf>,
@@ -398,17 +391,20 @@ struct RecordInfo<'a> {
     requested_dpi: Option<f64>,
     advance_requested: bool,
     settings: &'a ProcessSettings,
-    /// Previews are 8-bit with no share copy; everything else is a 16-bit master + JPEG.
+    /// Previews are 8-bit; everything else is a 16-bit master.
     preview: bool,
 }
 
-/// Write the positive master (16-bit gray, or 8-bit for previews) from a processed frame.
-fn write_master(
-    target: &FrameTarget,
+/// Write one positive (16-bit gray, or 8-bit for previews) with `description` (the settings
+/// record) in its `ImageDescription` tag.
+fn write_positive(
+    dir: &Path,
+    name: &str,
     frame: &GrayFrame,
     bits: u16,
+    description: String,
 ) -> Result<(PartialFile, File), ScanError> {
-    let (partial, file) = PartialFile::create(target.dir, &format!("{}.tif", target.stem))?;
+    let (partial, file) = PartialFile::create(dir, name)?;
     let layout = TiffLayout {
         width: frame.width,
         height: frame.height,
@@ -416,7 +412,7 @@ fn write_master(
         bits,
         dpi_x: dpi_along(frame.width, SCAN_AREA_MM.0),
         dpi_y: dpi_along(frame.height, SCAN_AREA_MM.1),
-        description: target.description.clone(),
+        description,
         software: software(),
         datetime: tiff_datetime(),
     };
@@ -442,14 +438,18 @@ fn write_master(
     Ok((partial, file))
 }
 
-/// Write the settings record, share copy and master of a processed frame, then publish them
-/// (record, share copy, master). Returns the saved frame.
+/// Write the processed positive `frame` with its settings record embedded, then publish it.
+/// Returns the saved frame.
+// Eight parameters is more than clippy's default limit; grouping them into a struct would only
+// move the same list somewhere else.
+#[allow(clippy::too_many_arguments)]
 fn save<S: ScanSession>(
     session: &mut S,
     captured: &Captured,
     frame: &GrayFrame,
     result: &ProcessedFrame,
-    target: &FrameTarget,
+    dir: &Path,
+    stem: &str,
     info: &RecordInfo,
     log: &Logger,
 ) -> Result<SavedFile, ScanError> {
@@ -466,9 +466,6 @@ fn save<S: ScanSession>(
         Vec::new()
     });
     let bits = if info.preview { 8 } else { 16 };
-    // `bool::then` gives `Some(value)` when true and `None` when false: previews have no
-    // share copy.
-    let share_name = (!info.preview).then(|| format!("{}.jpg", target.stem));
     let record = ScanRecord {
         record_version: RECORD_VERSION,
         software: software(),
@@ -497,16 +494,13 @@ fn save<S: ScanSession>(
             },
             channels: "Gray",
             bits_per_sample: bits,
-            encoding: "display gray (sRGB-like)",
-            share_copy: share_name,
         },
         processing: ProcessingRecord {
             film_type: info.settings.stock.film_type().id(),
             film_stock: info.settings.stock,
             profile: result.profile,
             points: result.points,
-            brightness: info.settings.brightness,
-            contrast: info.settings.contrast,
+            probably_blank: result.probably_blank,
             dust: DustRecord {
                 level: if result.dust.is_some() {
                     info.settings.dust
@@ -516,31 +510,22 @@ fn save<S: ScanSession>(
                 constants: result.dust,
                 repaired: result.dust_repaired,
             },
-            probably_blank: result.probably_blank,
             seconds: round_tenths(result.seconds),
             kept_capture: captured.kept_path.clone(),
         },
     };
-
-    let (record_partial, mut record_file) =
-        PartialFile::create(target.dir, &format!("{}.json", target.stem))?;
-    serde_json::to_writer_pretty(&mut record_file, &record)
-        .map_err(std::io::Error::from)
-        .and_then(|()| record_file.write_all(b"\n"))
-        .map_err(|e| write_error(&record_partial, &e))?;
-    let share = if info.preview {
-        None
-    } else {
-        Some(jpeg::write_share_copy(target.dir, target.stem, frame)?)
-    };
-    let master = write_master(target, frame, bits)?;
-    let published = output::publish_frame((record_partial, record_file), share, master)?;
+    // Our record holds only strings, numbers and lists, so this cannot fail; an error here
+    // would be a bug, reported as a failed write rather than a panic.
+    let description = serde_json::to_string(&record).map_err(|e| ScanError::OutputError {
+        path: dir.join(stem).display().to_string(),
+        reason: format!("could not encode the settings record: {e}"),
+    })?;
+    let (partial, file) = write_positive(dir, &format!("{stem}.tif"), frame, bits, description)?;
+    let image = partial.publish(file)?;
 
     Ok(SavedFile {
         frame: info.frame,
-        image: published.master,
-        share_copy: published.share_copy,
-        settings: published.record,
+        image,
         width: frame.width,
         height: frame.height,
         channels: "Gray",
@@ -570,13 +555,19 @@ fn full_settings(quality: Quality, advance_after: bool) -> ScanSettings {
     }
 }
 
-fn description(roll: &str, frame: u32, quality: Quality, stock: FilmStock) -> String {
-    format!(
-        "Roll {roll}, frame {frame:03}, preset {}, {} dpi, positive ({})",
-        quality.name(),
-        quality.dpi(),
-        stock.name()
-    )
+/// The settings for each frame of a roll: full scans, or for `roll --preview` an ordinary
+/// (not preview-mode) scan at preview resolution, which can advance the film.
+fn roll_settings(opts: &RunOptions) -> ScanSettings {
+    if opts.roll_preview {
+        ScanSettings {
+            kind: ScanKind::Full,
+            resolution_dpi: PREVIEW_DPI,
+            color: ColorFormat::Rgb8,
+            advance_after: true,
+        }
+    } else {
+        full_settings(opts.quality, true)
+    }
 }
 
 fn log_leftovers(dir: &Path, log: &Logger) {
@@ -665,10 +656,8 @@ fn scan_one<S: ScanSession>(
     if captured.stats.looks_empty() {
         return Err(ScanError::NoFilm);
     }
-    let (saved, result) = finish_frame(
-        session, captured, folder, &stem, frame, opts, None, false, log,
-    )?;
-    progress_saved(&saved, &result, None, "film not moved");
+    let (saved, result) = finish_frame(session, captured, folder, &stem, frame, opts, false, log)?;
+    progress_saved(&saved, &result, "film not moved");
     Ok(saved)
 }
 
@@ -693,8 +682,8 @@ fn capture_full<S: ScanSession>(
     capture(session, true, keep_target.as_ref(), cancel)
 }
 
-/// Process a captured full frame and save it. `locked` are a matched roll's points.
-// Nine parameters is more than clippy's default limit; grouping them into a struct would only
+/// Process a captured full frame and save it.
+// Eight parameters is more than clippy's default limit; grouping them into a struct would only
 // move the same list somewhere else.
 #[allow(clippy::too_many_arguments)]
 fn finish_frame<S: ScanSession>(
@@ -704,7 +693,6 @@ fn finish_frame<S: ScanSession>(
     stem: &str,
     frame: u32,
     opts: &RunOptions,
-    lock: Option<&mut ToneLock>,
     advance_requested: bool,
     log: &Logger,
 ) -> Result<(SavedFile, ProcessedFrame), ScanError> {
@@ -721,39 +709,44 @@ fn finish_frame<S: ScanSession>(
         frame: Some(frame),
         text: "no image was captured".to_string(),
     })?;
-    let locked = lock.as_ref().and_then(|l| l.points().copied());
-    let mut result = process::process(&mut gray, &opts.process, locked.as_ref())?;
-    // The frame that locks the tones records them as matched, like every later frame.
-    if let Some(lock) = lock
-        && lock.observe(frame, &result)
-        && let Some(points) = lock.points()
-    {
-        result.points = *points;
-    }
-    let target = FrameTarget {
-        dir: folder.dir(),
-        stem,
-        description: description(folder.name(), frame, opts.quality, opts.process.stock),
+    let result = process::process(&mut gray, &opts.process)?;
+    let (preset, requested_dpi) = if opts.roll_preview {
+        ("preview", PREVIEW_DPI)
+    } else {
+        (opts.quality.name(), opts.quality.dpi())
     };
     let info = RecordInfo {
         roll: Some(folder.name()),
         frame: Some(frame),
-        preset: opts.quality.name(),
-        requested_dpi: Some(opts.quality.dpi()),
+        preset,
+        requested_dpi: Some(requested_dpi),
         advance_requested,
         settings: &opts.process,
-        preview: false,
+        preview: opts.roll_preview,
     };
-    let mut saved = save(session, &captured, &gray, &result, &target, &info, log)?;
+    let mut saved = save(
+        session,
+        &captured,
+        &gray,
+        &result,
+        folder.dir(),
+        stem,
+        &info,
+        log,
+    )?;
     saved.seconds = round_tenths(captured.seconds + started.elapsed().as_secs_f64());
     Ok((saved, result))
 }
+
 /// `primefilm roll`: scan, advance, repeat until the end of the film (US1).
 ///
 /// Stops when a frame shows an empty gate or repeats the previous frame (the PrimeFilm XA
 /// stays on its last frame instead of reporting the end, research D4), after `limit` frames,
 /// after Ctrl-C (once the frame in progress is saved, research D6), or at the first error,
 /// without retrying (FR-017). Frames saved before the stop are always kept.
+///
+/// With `opts.roll_preview`, every frame is scanned at preview resolution and saved as an 8-bit
+/// preview in `<output>/previews/<roll>/`, apart from archival scans (002 FR-012).
 pub fn scan_roll<B: ScannerBackend>(
     backend: &mut B,
     roll: &str,
@@ -763,7 +756,12 @@ pub fn scan_roll<B: ScannerBackend>(
     log: &Logger,
     cancel: &AtomicBool,
 ) -> Result<RunReport, ScanError> {
-    let folder = RollFolder::open(&opts.output, roll)?;
+    let root = if opts.roll_preview {
+        opts.output.join("previews")
+    } else {
+        opts.output.clone()
+    };
+    let folder = RollFolder::open(&root, roll)?;
     log_leftovers(folder.dir(), log);
     let first = match start_frame {
         Some(n) => n,
@@ -777,21 +775,20 @@ pub fn scan_roll<B: ScannerBackend>(
     let mut report = RunReport::new(RunKind::Roll);
     report.roll = Some(roll.to_string());
     report.folder = Some(folder.dir().to_path_buf());
-    report.quality = Some(opts.quality);
+    // A roll preview has no quality preset.
+    report.quality = (!opts.roll_preview).then_some(opts.quality);
     report.film = Some(opts.process.stock);
     report.next_frame = Some(first);
+    let quality = if opts.roll_preview {
+        format!("preview, {PREVIEW_DPI} dpi")
+    } else {
+        format!("preset {}, {} dpi", opts.quality.name(), opts.quality.dpi())
+    };
     eprintln!(
-        "Roll {roll} → {} (preset {}, {} dpi, {}, dust {}{})",
+        "Roll {roll} → {} ({quality}, {}, dust {})",
         folder.dir().display(),
-        opts.quality.name(),
-        opts.quality.dpi(),
         opts.process.stock.name(),
         opts.process.dust.name(),
-        if opts.match_tones {
-            ", matching tones"
-        } else {
-            ""
-        }
     );
 
     let run = RollRun {
@@ -823,11 +820,9 @@ fn roll_loop<S: ScanSession>(
     report: &mut RunReport,
 ) -> Outcome {
     let (folder, opts) = (run.folder, run.opts);
-    if let Err(err) = session.configure(&full_settings(opts.quality, true)) {
+    if let Err(err) = session.configure(&roll_settings(opts)) {
         return Outcome::Failed(err);
     }
-    // One lock for the whole run when matching tones (research P7).
-    let mut lock = opts.match_tones.then(ToneLock::new);
     let mut previous: Option<Fingerprint> = None;
     let mut frame = first;
     loop {
@@ -868,28 +863,13 @@ fn roll_loop<S: ScanSession>(
             return Outcome::EndOfFilm(end_message(report));
         }
 
-        let was_locked = lock.as_ref().is_some_and(|l| l.points().is_some());
-        let result = finish_frame(
-            session,
-            captured,
-            folder,
-            &stem,
-            frame,
-            opts,
-            lock.as_mut(),
-            true,
-            run.log,
-        );
+        let result = finish_frame(session, captured, folder, &stem, frame, opts, true, run.log);
         match result {
             Ok((saved, processed)) => {
-                let locked_now = lock.as_ref().and_then(|l| l.points().copied());
-                // Report the points on the frame that locked them, not on every frame.
-                let newly = if was_locked { None } else { locked_now };
-                progress_saved(&saved, &processed, newly.as_ref(), "advancing film");
+                progress_saved(&saved, &processed, "advancing film");
                 run.log
                     .step(&format!("film advanced after frame {frame:03}"));
                 report.files.push(saved);
-                report.tone_points = locked_now;
             }
             Err(err) => return Outcome::Failed(for_frame(err, Some(frame))),
         }
@@ -959,7 +939,7 @@ fn preview_one<S: ScanSession>(
 ) -> Result<SavedFile, ScanError> {
     session.configure(&ScanSettings {
         kind: ScanKind::Preview,
-        resolution_dpi: 300.0,
+        resolution_dpi: PREVIEW_DPI,
         color: ColorFormat::Rgb8,
         advance_after: false,
     })?;
@@ -978,15 +958,7 @@ fn preview_one<S: ScanSession>(
         frame: None,
         text: "no image was captured".to_string(),
     })?;
-    let result = process::process(&mut gray, &settings, None)?;
-    let target = FrameTarget {
-        dir,
-        stem,
-        description: format!(
-            "Preview, positive ({}); not an archival scan",
-            settings.stock.name()
-        ),
-    };
+    let result = process::process(&mut gray, &settings)?;
     let info = RecordInfo {
         roll: None,
         frame: None,
@@ -996,9 +968,9 @@ fn preview_one<S: ScanSession>(
         settings: &settings,
         preview: true,
     };
-    let mut saved = save(session, &captured, &gray, &result, &target, &info, log)?;
+    let mut saved = save(session, &captured, &gray, &result, dir, stem, &info, log)?;
     saved.seconds = round_tenths(captured.seconds + started.elapsed().as_secs_f64());
-    progress_saved(&saved, &result, None, "film not moved");
+    progress_saved(&saved, &result, "film not moved");
     Ok(saved)
 }
 
@@ -1058,15 +1030,9 @@ fn advance_once<S: ScanSession>(
     )))
 }
 
-/// The progress line for a saved frame (stderr), e.g. `Frame 002: tones locked (black
-/// 0.142 D, white 1.387 D); 17 dust specks removed; saved r-002.tif + .jpg (5173 × 3443, gray
-/// 16-bit) in 93 s; advancing film`.
-fn progress_saved(
-    saved: &SavedFile,
-    result: &ProcessedFrame,
-    newly_locked: Option<&TonePoints>,
-    film: &str,
-) {
+/// The progress line for a saved frame (stderr), e.g. `Frame 002: probably blank; saved
+/// r-002.tif (5173 × 3443, gray 16-bit) in 93 s; advancing film`.
+fn progress_saved(saved: &SavedFile, result: &ProcessedFrame, film: &str) {
     let name = saved
         .image
         .file_name()
@@ -1080,22 +1046,11 @@ fn progress_saved(
     if result.probably_blank {
         notes.push_str("probably blank; ");
     }
-    if let Some(p) = newly_locked {
-        notes.push_str(&format!(
-            "tones locked (black {:.3} D, white {:.3} D); ",
-            p.black_density, p.white_density
-        ));
-    }
     if result.dust_repaired > 0 {
         notes.push_str(&format!("{} dust specks removed; ", result.dust_repaired));
     }
-    let share = if saved.share_copy.is_some() {
-        " + .jpg"
-    } else {
-        ""
-    };
     eprintln!(
-        "{label}: {notes}saved {name}{share} ({} × {}, gray {}-bit) in {:.0} s; {film}",
+        "{label}: {notes}saved {name} ({} × {}, gray {}-bit) in {:.0} s; {film}",
         saved.width, saved.height, saved.bits, saved.seconds
     );
 }
@@ -1130,8 +1085,8 @@ mod tests {
             quality_given: false,
             process: ProcessSettings::from_profile(FilmStock::Hp5),
             process_flags: Vec::new(),
-            match_tones: false,
             keep_capture: None,
+            roll_preview: false,
         }
     }
 
@@ -1153,6 +1108,24 @@ mod tests {
         names
     }
 
+    /// A roll preview uses ordinary scans at preview resolution, because the scanner's preview
+    /// mode never moves the film.
+    #[test]
+    fn roll_preview_uses_ordinary_low_resolution_scans_that_advance() {
+        let mut o = opts(Path::new("/x"));
+        assert_eq!(roll_settings(&o), full_settings(o.quality, true));
+        o.roll_preview = true;
+        assert_eq!(
+            roll_settings(&o),
+            ScanSettings {
+                kind: ScanKind::Full,
+                resolution_dpi: PREVIEW_DPI,
+                color: ColorFormat::Rgb8,
+                advance_after: true,
+            }
+        );
+    }
+
     #[test]
     fn single_scan_does_not_move_film() {
         let root = temp_dir("single");
@@ -1166,10 +1139,8 @@ mod tests {
         assert_eq!(saved.channels, "Gray");
         assert_eq!(saved.bits, 16);
         assert_eq!(saved.film, FilmStock::Hp5);
-        assert_eq!(
-            visible_files(folder.dir()),
-            vec!["t-001.jpg", "t-001.json", "t-001.tif"]
-        );
+        // The positive only: no raw capture, no sidecar, no share copy.
+        assert_eq!(visible_files(folder.dir()), vec!["t-001.tif"]);
     }
 
     /// The film order is checked on the captured gray frames: the simulated scanner marks
@@ -1194,9 +1165,9 @@ mod tests {
     fn failure_after_processing_stops_the_roll_and_keeps_earlier_frames() {
         let root = temp_dir("procfail");
         let dir = root.join("p");
-        // A folder where frame 3's share copy would be written makes saving it fail after the
+        // A folder where frame 3's positive would be written makes saving it fail after the
         // frame was captured and processed.
-        fs::create_dir_all(dir.join(".p-003.jpg.partial")).unwrap();
+        fs::create_dir_all(dir.join(".p-003.tif.partial")).unwrap();
         let mut backend = FakeBackend::new(Scenario::Ready, 6);
         let cancel = AtomicBool::new(false);
         let report = scan_roll(
@@ -1212,7 +1183,7 @@ mod tests {
         match &report.outcome {
             Outcome::Failed(err) => {
                 assert_eq!(err.outcome(), "output-error");
-                assert!(err.to_string().contains("p-003.jpg"), "{err}");
+                assert!(err.to_string().contains("p-003.tif"), "{err}");
             }
             other => panic!("expected a failure, got {other:?}"),
         }
@@ -1220,17 +1191,7 @@ mod tests {
         assert_eq!(report.next_frame, Some(3));
         let mut names = visible_files(&dir);
         names.retain(|n| !n.starts_with('.'));
-        assert_eq!(
-            names,
-            vec![
-                "p-001.jpg",
-                "p-001.json",
-                "p-001.tif",
-                "p-002.jpg",
-                "p-002.json",
-                "p-002.tif"
-            ]
-        );
+        assert_eq!(names, vec!["p-001.tif", "p-002.tif"]);
     }
 
     #[test]

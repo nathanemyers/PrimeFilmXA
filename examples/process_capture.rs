@@ -2,12 +2,11 @@
 //! processing pipeline, with any settings, without rescanning the film (research P12).
 //!
 //! ```text
-//! cargo run --example process_capture -- CAPTURE.tif --film hp5 [--dust normal]
-//!     [--brightness N] [--contrast N] [--black D --white D] --out DIR
+//! cargo run --example process_capture -- CAPTURE.tif --film hp5 [--dust normal] --out DIR
 //! ```
 //!
-//! Writes `<capture name>-<settings>.tif` (16-bit gray) and `.jpg` into DIR and prints the
-//! points, the blank flag, the number of specks repaired and the time taken.
+//! Writes `<capture name>-<film>-<dust>.tif` (16-bit gray) into DIR and prints the black and
+//! white points, the blank flag, the number of specks repaired and the time taken.
 //!
 //! An example is a small program that uses the library like any other crate would; it is
 //! built with `cargo build --examples` and run with `cargo run --example NAME`. This one may
@@ -21,7 +20,6 @@ use std::process::ExitCode;
 use primefilm::backend::FrameParams;
 use primefilm::film::{DustLevel, FilmStock, parse_film};
 use primefilm::gray::GrayFrame;
-use primefilm::jpeg::write_share_copy;
 use primefilm::preset::SCAN_AREA_MM;
 use primefilm::process::{self, ProcessSettings};
 use primefilm::tiff::{TiffLayout, TiffWriter};
@@ -40,9 +38,6 @@ fn parse_args() -> Result<Args, String> {
     let mut out = None;
     let mut stock = FilmStock::DEFAULT;
     let mut dust = None;
-    let mut brightness = None;
-    let mut contrast = None;
-    let (mut black, mut white) = (None, None);
     while let Some(word) = words.next() {
         // Every option takes one value.
         let mut value = || words.next().ok_or(format!("{word} needs a value"));
@@ -58,10 +53,6 @@ fn parse_args() -> Result<Args, String> {
                     _ => return Err(format!("unknown dust level {text}")),
                 });
             }
-            "--brightness" => brightness = Some(number(&value()?)? as i32),
-            "--contrast" => contrast = Some(number(&value()?)? as i32),
-            "--black" => black = Some(number(&value()?)?),
-            "--white" => white = Some(number(&value()?)?),
             "--out" => out = Some(PathBuf::from(value()?)),
             _ if capture.is_none() && !word.starts_with("--") => {
                 capture = Some(PathBuf::from(word))
@@ -74,17 +65,10 @@ fn parse_args() -> Result<Args, String> {
         capture: capture.ok_or("give the capture TIFF to process")?,
         out: out.ok_or("give --out DIR")?,
         settings: ProcessSettings {
-            brightness: brightness.unwrap_or(defaults.brightness),
-            contrast: contrast.unwrap_or(defaults.contrast),
-            points: black.zip(white),
             dust: dust.unwrap_or(defaults.dust),
             ..defaults
         },
     })
-}
-
-fn number(text: &str) -> Result<f64, String> {
-    text.parse().map_err(|_| format!("{text} is not a number"))
 }
 
 /// Decode a kept RGB(I) capture into a gray frame, exactly as a live scan would build it.
@@ -126,8 +110,6 @@ fn save(frame: &GrayFrame, dir: &Path, stem: &str) -> Result<(), String> {
     let bytes: Vec<u8> = frame.pixels.iter().flat_map(|v| v.to_ne_bytes()).collect();
     tiff.write(&bytes).map_err(|e| e.to_string())?;
     tiff.finish().map_err(|e| e.to_string())?;
-    let (partial, file) = write_share_copy(dir, stem, frame).map_err(|e| e.to_string())?;
-    partial.publish(file).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -135,23 +117,17 @@ fn run() -> Result<(), String> {
     let args = parse_args()?;
     let mut frame = load(&args.capture)?;
     let s = &args.settings;
-    let result = process::process(&mut frame, s, None).map_err(|e| e.to_string())?;
+    let result = process::process(&mut frame, s).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&args.out).map_err(|e| e.to_string())?;
     let name = args
         .capture
         .file_stem()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let stem = format!(
-        "{name}-{}-b{}-c{}-{}",
-        s.stock.value(),
-        s.brightness,
-        s.contrast,
-        s.dust.name()
-    );
+    let stem = format!("{name}-{}-{}", s.stock.value(), s.dust.name());
     save(&frame, &args.out, &stem)?;
     println!(
-        "{stem}: black {:.3} D, white {:.3} D ({:?}){}; {} dust specks repaired; {:.1} s",
+        "wrote {stem}.tif: black {:.3} D, white {:.3} D ({:?}){}; {} dust specks repaired; {:.1} s",
         result.points.black_density,
         result.points.white_density,
         result.points.source,

@@ -6,6 +6,12 @@
 
 ## Summary
 
+> **Revised 2026-11-09 after the first real scans (research P15, P16):** automatic black and
+> white points with the plain density mapping, but no brightness, contrast, explicit points or
+> tone matching; one TIFF per frame with the settings record embedded; no JPEG or JSON files;
+> dust removal off by default; `roll --preview`. `jpeg-encoder` is no longer used. The original
+> plan follows.
+
 `scan`, `roll` and `preview` stop saving raw negatives and save finished B&W positives
 instead. While a frame streams in from the scanner, the R, G and B samples are averaged into a
 16-bit gray frame held in memory (36 MB at `standard`). When the frame ends:

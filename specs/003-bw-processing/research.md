@@ -267,6 +267,61 @@ No crate for image processing: histogram, tone table, flood fill and repair are 
 - **Hardware** (`#[ignore]`): scan one frame and a short strip of HP5 and FP4; timing against
   002 E8 (SC-002).
 
+### P15. Revision after the first real scans (2026-11-09)
+
+- **Finding**: on the owner's first real HP5 frames, processed positives showed dark outlines
+  around objects, flat patches and clipped highlights (a cap brim, a cat's face, plant
+  leaves). A per-pixel tone curve cannot draw outlines; dust removal can. The likely cause is
+  `opaque_range` (2.0 D above the film base, P5/P8): real highlights denser than that were
+  counted as "opaque", so the densest-silver measure fell below them. The grainy edges of
+  highlight areas then became small "dust" components and were filled with flat means, while
+  large highlight areas were too big to touch. The same rule also clipped those highlights to
+  white in the tone curve. Not yet confirmed on a kept raw capture (E11).
+- **Decisions (owner)**:
+  - All per-frame tone balancing is removed: automatic black/white points, brightness,
+    contrast, explicit points and tone matching (P4 tone curve, P5 points, P7). Tones are set
+    in post.
+  - Two fixed inversions are written for every frame until the owner picks one: **linear**
+    (`65535 − raw`, `<stem>.tif`) and **density** (`density / density(1) × 65535`, the full
+    0–4.82 D range, `<stem>-density.tif`). Neither clips or stretches.
+  - The JPEG share copy (P10, P13: `jpeg-encoder` removed) and the JSON sidecar are dropped.
+    Constitution Principle I still requires a settings record "in embedded metadata or a
+    sidecar file", so the record (version 2, the same fields minus the tone settings, plus
+    `output.inversion`) is embedded as compact JSON in each TIFF's `ImageDescription` tag.
+  - Dust removal stays, off by default, until `opaque_range` and the margins are tuned on
+    real captures (E11). The histogram measures that remain (film base, densest silver) serve
+    dust removal only.
+- **Disk at `standard`**: two 36 MB positives per frame, about half the raw size; one third or
+  less once one inversion is chosen.
+
+### P16. Automatic points restored (2026-11-09)
+
+- **Finding**: on a real `roll --preview` of HP5 (8-bit), the raw negative used only values
+  2–52 of 255 (the film base is about 0.7 D for this scanner exposure). The fixed inversions of
+  P15 squeezed the picture into 20% (linear) or 30% (density) of the output range, which looked
+  flat and grey. Re-processing frame 003, the same frame as the owner's first artifact example,
+  with the P5 automatic points and dust removal off gave black 0.888 D and white 2.106 D and a
+  clean picture with no outlines or flat patches. *(This was taken as confirming P15's
+  diagnosis; it did not: see P17. At 431 × 287 the outlines are too small to see.)*
+- **Decision (owner)**: restore P4/P5 automatic black and white points with the plain density
+  mapping (no contrast or brightness curve) as the only output; drop the two-inversion
+  comparison. Keep dust removal off by default, no explicit points or tone matching, and TIFF
+  only with the embedded record (now again with `processing.points` and
+  `processing.probably_blank`).
+
+### P17. The artifacts are on the negatives (2026-11-09)
+
+- **Finding**: the owner checked the same frames in VueScan and they show the same outlines and
+  flat patches. The artifacts are in the developed film, not caused by this tool's tone
+  balancing or dust removal. P15's diagnosis (dust removal mistaking highlights for dust) and
+  P16's "confirmation" (based on a 431 × 287 preview, too small to show the outlines) were
+  wrong. The look (dark lines along edges, partly reversed highlights) fits a development fault
+  such as the Sabattier effect (fogging partway through development); not established.
+- **Consequence**: nothing in the pipeline is known to be faulty. The current behaviour stays:
+  automatic black and white points (P16), no other tone adjustments, one TIFF per frame, and dust
+  removal off by default, now simply because it has never been tested on real film (E11), not
+  because it was shown to damage frames.
+
 ## Open risks
 
 - **R1, dust density margin**: if specks on real scans are much less opaque than assumed, the

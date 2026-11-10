@@ -164,19 +164,17 @@ pub struct Profile {
     /// Density range used instead for a probably blank frame.
     pub nominal_range: f64,
     /// Pixels this much denser than black are treated as opaque (dust), not silver, when
-    /// setting the white point. A normally developed B&W negative's highlights stay well
-    /// below it.
+    /// setting the white point and when finding dust. A normally developed B&W negative's
+    /// highlights should stay below it; frames where they do not are why dust removal is off
+    /// by default until this is tuned on real captures.
     pub opaque_range: f64,
-    #[serde(skip)]
-    pub brightness: i32,
-    #[serde(skip)]
-    pub contrast: i32,
     #[serde(skip)]
     pub dust: DustLevel,
 }
 
 impl Profile {
-    /// Starting values for B&W negatives, to be tuned on real captures (research E11).
+    /// Starting values for B&W negatives, to be tuned on real captures (research E11). Dust
+    /// removal is off until it has been tested on real film (research P17).
     const BW_START: Profile = Profile {
         black_clip: 0.001,
         white_clip: 0.0005,
@@ -184,9 +182,7 @@ impl Profile {
         min_range: 0.15,
         nominal_range: 1.2,
         opaque_range: 2.0,
-        brightness: 0,
-        contrast: 0,
-        dust: DustLevel::Normal,
+        dust: DustLevel::Off,
     };
 }
 
@@ -227,7 +223,7 @@ mod tests {
         let bw = FilmStock::Bw.profile();
         assert_eq!(FilmStock::Hp5.profile(), bw);
         assert_eq!(FilmStock::Fp4.profile(), bw);
-        assert_eq!(bw.dust, DustLevel::Normal);
+        assert_eq!(bw.dust, DustLevel::Off);
     }
 
     #[test]

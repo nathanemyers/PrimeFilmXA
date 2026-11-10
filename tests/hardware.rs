@@ -96,8 +96,8 @@ fn preview_is_quick() {
     assert!(started.elapsed().as_secs() < 15, "{:?}", started.elapsed());
 }
 
-/// Needs an HP5 strip loaded. Does not move the film. Saves a positive, a share copy and a
-/// record, and no raw capture (003 US1).
+/// Needs an HP5 strip loaded. Does not move the film. Saves one positive and no raw capture
+/// (003 US1).
 #[test]
 #[ignore]
 fn scan_one_frame() {
@@ -118,10 +118,7 @@ fn scan_one_frame() {
     let doc: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(doc["files"][0]["channels"], "Gray");
     assert_eq!(doc["files"][0]["bits"], 16);
-    assert_eq!(
-        names(&out.join("hwtest")),
-        vec!["hwtest-001.jpg", "hwtest-001.json", "hwtest-001.tif"]
-    );
+    assert_eq!(names(&out.join("hwtest")), vec!["hwtest-001.tif"]);
 }
 
 /// Needs an FP4 strip with at least 2 frames loaded. MOVES THE FILM two frames.
@@ -148,7 +145,7 @@ fn roll_two_frames() {
     assert_eq!(doc["files"].as_array().unwrap().len(), 2);
     assert_eq!(
         names(&out.join("hwtest")).len(),
-        6,
-        "3 files per frame, nothing else"
+        2,
+        "1 file per frame, nothing else"
     );
 }
