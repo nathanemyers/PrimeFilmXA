@@ -7,11 +7,16 @@ use serde::Serialize;
 use crate::backend::DeviceInfo;
 use crate::capability::{Capability, CapabilitySummary, Constraint, Infrared, Unit, Value};
 use crate::error::ScanError;
-use crate::preset::{Preset, Quality, frame_pixels, rgbi16_bytes};
+use crate::film::FilmStock;
+use crate::preset::{Preset, Quality, frame_pixels};
 use crate::scan::{FilmMoved, Outcome, RunKind, RunOptions, RunReport, SavedFile};
 
-/// Version of the `--json` format. Increases only for incompatible changes.
+/// Version of the `--json` format of `detect` and `capabilities`. Increases only for
+/// incompatible changes.
 const SCHEMA_VERSION: u32 = 1;
+
+/// Version of the scanning commands' `--json` format: 2 since feature 003 (positives).
+const SCAN_SCHEMA_VERSION: u32 = 2;
 
 /// Prints `-v` progress steps on stderr.
 #[derive(Debug, Clone, Copy)]
@@ -61,13 +66,13 @@ struct CapabilitiesReport {
 }
 
 /// Print a failure: always the message and next step on stderr; with `json`, also a JSON
-/// document on stdout.
-pub fn print_error(err: &ScanError, json: bool) {
+/// document on stdout, in the failed command's `schema_version`.
+pub fn print_error(err: &ScanError, json: bool, schema_version: u32) {
     eprintln!("{err}");
     eprintln!("Next step: {}", err.next_step());
     if json {
         print_json(&ErrorReport {
-            schema_version: SCHEMA_VERSION,
+            schema_version,
             outcome: err.outcome(),
             message: err.to_string(),
             next_step: err.next_step(),
@@ -243,9 +248,26 @@ struct ScanReport {
     preset: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     resolution_dpi: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    film: Option<FilmStock>,
     files: Vec<SavedFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     film_moved: Option<FilmMoved>,
+}
+
+#[derive(Serialize)]
+struct FilmsReport {
+    schema_version: u32,
+    outcome: &'static str,
+    films: Vec<FilmInfo>,
+}
+
+#[derive(Serialize)]
+struct FilmInfo {
+    value: &'static str,
+    name: &'static str,
+    film_type: &'static str,
+    default: bool,
 }
 
 #[derive(Serialize)]
@@ -286,7 +308,7 @@ pub fn print_run(report: &RunReport, opts: &RunOptions, json: bool) {
             Outcome::Failed(err) => err.outcome(),
         };
         print_json(&ScanReport {
-            schema_version: SCHEMA_VERSION,
+            schema_version: SCAN_SCHEMA_VERSION,
             outcome,
             message,
             next_step,
@@ -294,6 +316,7 @@ pub fn print_run(report: &RunReport, opts: &RunOptions, json: bool) {
             folder: report.folder.as_ref().map(|f| f.display().to_string()),
             preset: report.quality.map(Quality::name),
             resolution_dpi: report.quality.map(Quality::dpi),
+            film: report.film,
             files: report.files.clone(),
             film_moved: match (report.kind, &report.outcome) {
                 (RunKind::Advance, Outcome::Completed(_)) => Some(FilmMoved::Advanced),
@@ -374,18 +397,25 @@ fn outcome_text(report: &RunReport, opts: &RunOptions) -> (Option<String>, Optio
     (Some(message), Some(next_step))
 }
 
-/// `primefilm roll --roll R --start-frame N`, repeating the quality and output folder if the
-/// owner chose them.
+/// `primefilm roll --roll R --start-frame N`, repeating the quality, processing options and
+/// output folder the owner chose.
 fn resume_command(report: &RunReport, opts: &RunOptions, next: u32) -> String {
     let mut cmd = format!(
         "primefilm roll --roll {} --start-frame {next}",
         report.roll.as_deref().unwrap_or_default()
     );
+    if opts.roll_preview {
+        cmd.push_str(" --preview");
+    }
     if opts.quality_given {
         match opts.quality {
             Quality::Preset(p) => cmd.push_str(&format!(" --preset {p}")),
             Quality::Custom(dpi) => cmd.push_str(&format!(" --resolution {dpi}")),
         }
+    }
+    for flag in &opts.process_flags {
+        cmd.push(' ');
+        cmd.push_str(flag);
     }
     if opts.output_given {
         cmd.push_str(&format!(
@@ -427,7 +457,8 @@ pub fn print_presets(json: bool) {
                 resolution_dpi: p.dpi(),
                 width,
                 height,
-                file_bytes: rgbi16_bytes(p.dpi()),
+                // The 16-bit gray master; the JPEG share copy adds roughly a tenth.
+                file_bytes: u64::from(width) * u64::from(height) * 2,
                 seconds_per_frame: p.seconds_per_frame(),
                 default: *p == Preset::DEFAULT,
             }
@@ -435,7 +466,7 @@ pub fn print_presets(json: bool) {
         .collect();
     if json {
         print_json(&PresetsReport {
-            schema_version: SCHEMA_VERSION,
+            schema_version: SCAN_SCHEMA_VERSION,
             outcome: "completed",
             presets,
         });
@@ -461,9 +492,41 @@ pub fn print_presets(json: bool) {
         );
     }
     println!();
-    println!("Every full scan is RGB + infrared at 16 bits per channel; presets change only the");
-    println!("resolution. Use --resolution DPI for any other value from 25 to 5000 (the");
-    println!("scanner's sensor resolves no more than 5000 dpi across the frame).");
+    println!("Every full scan is saved as 16-bit gray positives (size shown is one of them);");
+    println!("presets change only the resolution. Use --resolution DPI for any other value from");
+    println!("25 to 5000 (the scanner's sensor resolves no more than 5000 dpi across the frame).");
+}
+
+/// Print the film stocks for `primefilm films`.
+pub fn print_films(json: bool) {
+    let films: Vec<FilmInfo> = FilmStock::ALL
+        .iter()
+        .map(|s| FilmInfo {
+            value: s.value(),
+            name: s.name(),
+            film_type: s.film_type().id(),
+            default: *s == FilmStock::DEFAULT,
+        })
+        .collect();
+    if json {
+        print_json(&FilmsReport {
+            schema_version: SCAN_SCHEMA_VERSION,
+            outcome: "completed",
+            films,
+        });
+        return;
+    }
+    println!("{:<6} {:<33} Type", "Film", "Name");
+    for (film, stock) in films.iter().zip(FilmStock::ALL) {
+        let marker = if film.default { "  (default)" } else { "" };
+        println!(
+            "{:<6} {:<33} {}{marker}",
+            film.value,
+            film.name,
+            stock.film_type().name()
+        );
+    }
+    println!("Color film is not supported yet.");
 }
 
 /// "143 MB" or "1.1 GB".
@@ -497,6 +560,7 @@ mod tests {
             roll: Some("r".to_string()),
             folder: Some(PathBuf::from("/x/r")),
             quality: Some(Quality::Preset(Preset::Web)),
+            film: Some(FilmStock::Hp5),
             files: Vec::new(),
             outcome,
             next_frame: Some(3),
@@ -511,6 +575,10 @@ mod tests {
             device: None,
             quality: Quality::Preset(Preset::Web),
             quality_given,
+            process: crate::process::ProcessSettings::from_profile(FilmStock::Hp5),
+            process_flags: Vec::new(),
+            keep_capture: None,
+            roll_preview: false,
         }
     }
 
@@ -524,6 +592,22 @@ mod tests {
         assert_eq!(
             resume_command(&report, &opts(true, "/my scans", true), 3),
             "primefilm roll --roll r --start-frame 3 --preset web --output '/my scans'"
+        );
+    }
+
+    #[test]
+    fn resume_command_repeats_processing_options() {
+        let report = roll_report(Outcome::Failed(ScanError::Interrupted));
+        let mut o = opts(false, "/d", false);
+        o.process_flags = vec![
+            "--film".into(),
+            "hp5".into(),
+            "--dust".into(),
+            "normal".into(),
+        ];
+        assert_eq!(
+            resume_command(&report, &o, 3),
+            "primefilm roll --roll r --start-frame 3 --film hp5 --dust normal"
         );
     }
 
@@ -564,6 +648,7 @@ mod tests {
             folder: None,
             preset: Some("web"),
             resolution_dpi: Some(1800.0),
+            film: None,
             files: Vec::new(),
             film_moved: None,
         })

@@ -15,13 +15,18 @@
 pub mod backend;
 pub mod capability;
 pub mod cli;
+pub mod dust;
 pub mod error;
+pub mod film;
 pub mod frame_stats;
+pub mod gray;
 pub mod output;
 pub mod preset;
+pub mod process;
 pub mod report;
 pub mod scan;
 pub mod tiff;
+pub mod tone;
 pub mod usb;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,8 +35,9 @@ use backend::fake::FakeBackend;
 use backend::sane::SaneBackend;
 use backend::{ScannerBackend, choose_device};
 use capability::CapabilitySummary;
-use cli::{Cli, Command, QualityArgs, TargetArgs};
+use cli::{Cli, Command, ProcessArgs, QualityArgs, TargetArgs};
 use error::ScanError;
+use film::DustLevel;
 use preset::{Preset, Quality};
 use report::Logger;
 use scan::{Outcome, RunOptions, RunReport};
@@ -109,9 +115,11 @@ fn dispatch<B: ScannerBackend>(
             roll,
             frame,
             quality,
+            process,
+            dust,
             target,
         } => {
-            let opts = run_options(target, quality)?;
+            let opts = run_options(cli, target, quality, process, *dust)?;
             // `unwrap_or_else` runs the function only when no roll name was given.
             let roll = roll.clone().unwrap_or_else(output::default_roll_name);
             let report = scan::scan_single(backend, &roll, *frame, &opts, log, cancel)?;
@@ -121,17 +129,37 @@ fn dispatch<B: ScannerBackend>(
             roll,
             start_frame,
             frames,
+            preview,
             quality,
+            process,
+            dust,
             target,
         } => {
-            let opts = run_options(target, quality)?;
+            // Previews never remove dust (research P11).
+            let dust = if *preview {
+                Some(DustLevel::Off)
+            } else {
+                *dust
+            };
+            let mut opts = run_options(cli, target, quality, process, dust)?;
+            opts.roll_preview = *preview;
+            // `--dust off` is implied by `--preview`, not something to repeat when resuming.
+            if *preview {
+                opts.process_flags = process.flags(None);
+            }
             let roll = roll.clone().unwrap_or_else(output::default_roll_name);
             let report =
                 scan::scan_roll(backend, &roll, *start_frame, *frames, &opts, log, cancel)?;
             finish(&report, &opts, cli.json)?;
         }
-        Command::Preview { target } => {
-            let opts = run_options(target, &QualityArgs::default())?;
+        Command::Preview { process, target } => {
+            let opts = run_options(
+                cli,
+                target,
+                &QualityArgs::default(),
+                process,
+                Some(DustLevel::Off),
+            )?;
             let report = scan::preview(backend, &opts, log, cancel)?;
             finish(&report, &opts, cli.json)?;
         }
@@ -147,17 +175,28 @@ fn dispatch<B: ScannerBackend>(
                 device: target.device,
                 quality: Quality::Preset(Preset::DEFAULT),
                 quality_given: false,
+                process: ProcessArgs::default().settings(None),
+                process_flags: Vec::new(),
+                keep_capture: None,
+                roll_preview: false,
             };
             let report = scan::advance(backend, opts.device.as_deref(), log, cancel)?;
             finish(&report, &opts, cli.json)?;
         }
         Command::Presets => report::print_presets(cli.json),
+        Command::Films => report::print_films(cli.json),
     }
     Ok(())
 }
 
 /// Turn the scanning commands' shared options into [`RunOptions`].
-fn run_options(target: &TargetArgs, quality: &QualityArgs) -> Result<RunOptions, ScanError> {
+fn run_options(
+    cli: &Cli,
+    target: &TargetArgs,
+    quality: &QualityArgs,
+    process: &ProcessArgs,
+    dust: Option<DustLevel>,
+) -> Result<RunOptions, ScanError> {
     let output = match &target.output {
         Some(dir) => dir.clone(),
         None => output::default_output_root()?,
@@ -173,6 +212,10 @@ fn run_options(target: &TargetArgs, quality: &QualityArgs) -> Result<RunOptions,
         device: target.device.clone(),
         quality: chosen.unwrap_or(Quality::Preset(Preset::DEFAULT)),
         quality_given: chosen.is_some(),
+        process: process.settings(dust),
+        process_flags: process.flags(dust),
+        keep_capture: cli.keep_capture.clone(),
+        roll_preview: false,
     })
 }
 

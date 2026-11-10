@@ -142,12 +142,35 @@ impl FakeSession {
     }
 }
 
-/// Sample value at a pixel: a pattern that shifts with the frame number, so different frames
-/// have different fingerprints, kept below 60% of full scale so it never looks like an empty
-/// gate. Returned as a fraction of full scale.
-fn pattern(frame: u32, x: u32, y: u32, channel: u32) -> f64 {
-    let v = (x * 7 + y * 3 + frame * 37 + channel * 11) % 64;
-    0.6 * f64::from(v) / 64.0
+/// Transmitted light at a pixel of a simulated B&W negative, as a fraction of full scale:
+/// a clear film-base border 2% wide, a picture whose density (0.2–1.6 D) shifts with the frame
+/// number so different frames have different fingerprints, a little grain, and three opaque
+/// one-pixel dust specks (research P14). Silver is neutral, so every channel is the same.
+fn negative(frame: u32, x: u32, y: u32, width: u32, height: u32) -> f64 {
+    let (bx, by) = ((width / 50).max(1), (height / 50).max(1));
+    if x < bx || x >= width - bx || y < by || y >= height - by {
+        return 0.8;
+    }
+    if dust_specks(width, height).contains(&(x, y)) {
+        return 30.0 / 65535.0;
+    }
+    let step = (x * 7 + y * 3 + frame * 37) % 64;
+    // A small integer hash of the position and frame gives repeatable "grain" of ±0.02 D.
+    let hash =
+        (x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663) ^ frame.wrapping_mul(83_492_791))
+            % 41;
+    let grain = (f64::from(hash) - 20.0) / 1000.0;
+    let density = 0.2 + 1.4 * f64::from(step) / 63.0 + grain;
+    10f64.powf(-density)
+}
+
+/// Where the simulated frames carry dust (for tests).
+pub fn dust_specks(width: u32, height: u32) -> [(u32, u32); 3] {
+    [
+        (width / 3, height / 3),
+        (width / 2, height / 2),
+        (2 * width / 3, 2 * height / 3),
+    ]
 }
 
 impl ScanSession for FakeSession {
@@ -190,6 +213,7 @@ impl ScanSession for FakeSession {
         let (width, height) = frame_pixels((dpi / 50.0).max(12.0));
         let (channels, bits) = match settings.color {
             ColorFormat::Rgbi16 => (4u32, 16u16),
+            ColorFormat::Rgb16 => (3, 16),
             ColorFormat::Rgb8 => (3, 8),
         };
         let empty = self.scenario == Scenario::NoFilm
@@ -199,23 +223,26 @@ impl ScanSession for FakeSession {
         self.read_pos = 0;
         for y in 0..height {
             for x in 0..width {
-                for c in 0..channels {
-                    let mut fraction = if empty {
-                        0.8
-                    } else {
-                        pattern(self.position, x, y, c)
-                    };
-                    // The very first sample holds the frame number, so tests can check order.
-                    if x == 0 && y == 0 && c == 0 && !empty {
-                        fraction = f64::from(self.position) / f64::from(u16::MAX);
-                    }
+                let fraction = if empty {
+                    0.8
+                } else {
+                    negative(self.position, x, y, width, height)
+                };
+                for _ in 0..channels {
+                    // The very first pixel holds the frame number counted down from full
+                    // scale (bright film base, so it is never mistaken for dust), so tests
+                    // can check the film order.
+                    let marker = x == 0 && y == 0 && !empty;
                     if bits == 16 {
-                        let v = (fraction * 65535.0).round() as u16;
+                        let v = if marker {
+                            u16::MAX - self.position.min(255) as u16
+                        } else {
+                            (fraction * 65535.0).round() as u16
+                        };
                         self.data.extend_from_slice(&v.to_ne_bytes());
                     } else {
-                        let v = if x == 0 && y == 0 && c == 0 && !empty {
-                            // Frame number directly, for 8-bit frames too.
-                            self.position.min(255) as u8
+                        let v = if marker {
+                            u8::MAX - self.position.min(255) as u8
                         } else {
                             (fraction * 255.0).round() as u8
                         };
@@ -300,7 +327,7 @@ mod tests {
         }
     }
 
-    /// Capture one frame and return its first 16-bit sample (the frame number).
+    /// Capture one frame and return the frame number held in its first sample.
     fn capture(session: &mut FakeSession) -> u16 {
         let cancel = AtomicBool::new(false);
         let params = session.start_frame(&cancel).unwrap();
@@ -310,7 +337,37 @@ mod tests {
             filled += session.read(&mut data[filled..]).unwrap();
         }
         session.end_frame();
-        u16::from_ne_bytes([data[0], data[1]])
+        u16::MAX - u16::from_ne_bytes([data[0], data[1]])
+    }
+
+    #[test]
+    fn rgb16_frames_have_three_16_bit_samples() {
+        let mut backend = FakeBackend::new(Scenario::Ready, 3);
+        let mut session = backend.open(None).unwrap();
+        session
+            .configure(&ScanSettings {
+                color: ColorFormat::Rgb16,
+                ..full(false)
+            })
+            .unwrap();
+        let params = session.start_frame(&AtomicBool::new(false)).unwrap();
+        assert_eq!(params.channels, 3);
+        assert_eq!(
+            params.image_bytes(),
+            u64::from(params.pixels_per_line) * u64::from(params.lines) * 6
+        );
+        session.end_frame();
+    }
+
+    #[test]
+    fn frames_look_like_negatives_with_dust() {
+        let (w, h) = (72, 48);
+        assert_eq!(negative(1, 0, 10, w, h), 0.8);
+        for (x, y) in dust_specks(w, h) {
+            assert!(negative(1, x, y, w, h) < 0.001);
+        }
+        let d = -negative(2, 20, 30, w, h).log10();
+        assert!((0.17..1.63).contains(&d), "{d}");
     }
 
     #[test]

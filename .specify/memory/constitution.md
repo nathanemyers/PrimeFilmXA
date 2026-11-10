@@ -4,18 +4,32 @@
 
 ### I. Archival Fidelity
 
-The tool exists to digitize irreplaceable film. Original scan data is sacred.
+The tool exists to digitize irreplaceable film. Every frame scanned gets exactly one archive
+master, and that master is sacred.
 
-- Raw scans MUST be saved losslessly at the scanner's full captured bit depth (e.g. 16 bits per
-  channel TIFF), including the infrared channel when the scanner provides one.
-- Original files MUST never be overwritten or modified in place. Cropping, inversion, color
-  correction, dust removal and downsizing MUST produce separate derivative files.
-- Every saved scan MUST record the settings used to capture it (resolution, bit depth, exposure,
-  backend, timestamp) in embedded metadata or a sidecar file.
+- The archive master is one of two kinds:
+  - a **raw scan**, saved losslessly at the scanner's full captured bit depth (e.g. 16 bits per
+    channel TIFF), including the infrared channel when the scanner provides one; or
+  - a **processed master**, for film types whose processing is specified (for example B&W
+    negatives), made from the capture during scanning: full resolution, lossless, at least
+    16 bits per channel. The raw capture is then not kept, and any temporary data MUST be
+    removed on every exit path.
+- A film type MAY use processed masters only when its feature spec says so explicitly. Film
+  types without specified processing MUST keep raw scans.
+- Archive masters MUST never be overwritten or modified in place. Anything made from a master
+  (share copies, crops, edits, downsizing) MUST be a separate derivative file, clearly named so
+  it is never mistaken for the master.
+- Every master MUST record the settings used to capture it (resolution, bit depth, exposure,
+  backend, timestamp); a processed master MUST also record its film stock, every processing
+  setting actually used, and the tool version, so it can be traced and its processing
+  reproduced from a rescan.
 - A failed or interrupted scan MUST NOT leave a file that looks complete; partial output is
   written to a temporary name and renamed only on success.
 
-Rationale: a lost or degraded original may mean re-handling fragile film, or losing it outright.
+Rationale: a lost or degraded master may mean re-handling fragile film, or losing it outright.
+Raw scans of a whole roll cost several gigabytes and the owner wants only finished images for
+film the tool knows how to process; a lossless 16-bit processed master keeps the tonal detail
+that matters, at the accepted cost that changing its processing means rescanning the film.
 
 ### II. Hardware Safety
 
@@ -125,4 +139,4 @@ real code makes the learning stick.
 - Plans and reviews MUST check compliance with the Core Principles; added complexity MUST be
   justified in writing.
 
-**Version**: 1.1.0 | **Ratified**: 2026-11-08 | **Last Amended**: 2026-11-08
+**Version**: 2.0.0 | **Ratified**: 2026-11-08 | **Last Amended**: 2026-11-09

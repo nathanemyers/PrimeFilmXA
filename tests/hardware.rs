@@ -60,19 +60,44 @@ fn temp_out(label: &str) -> std::path::PathBuf {
     dir
 }
 
-/// Needs a film strip loaded. Does not move the film.
+/// The file names in a folder, hidden ones included, sorted.
+fn names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Needs a B&W strip loaded. Does not move the film. The preview is a positive (003 US6).
 #[test]
 #[ignore]
 fn preview_is_quick() {
     let out = temp_out("preview");
     let started = std::time::Instant::now();
-    let (code, _, stderr) = primefilm(&["preview", "--output", out.to_str().unwrap()]);
+    let (code, stdout, stderr) = primefilm(&[
+        "--json",
+        "preview",
+        "--film",
+        "hp5",
+        "--output",
+        out.to_str().unwrap(),
+    ]);
     assert_eq!(code, 0, "{stderr}");
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["files"][0]["channels"], "Gray");
+    assert_eq!(doc["files"][0]["bits"], 8);
     // SC-002 (the lock wait is negligible: tests take turns only on contention).
     assert!(started.elapsed().as_secs() < 15, "{:?}", started.elapsed());
 }
 
-/// Needs a film strip loaded. Does not move the film.
+/// Needs an HP5 strip loaded. Does not move the film. Saves one positive and no raw capture
+/// (003 US1).
 #[test]
 #[ignore]
 fn scan_one_frame() {
@@ -82,6 +107,8 @@ fn scan_one_frame() {
         "scan",
         "--roll",
         "hwtest",
+        "--film",
+        "hp5",
         "--preset",
         "web",
         "--output",
@@ -89,11 +116,12 @@ fn scan_one_frame() {
     ]);
     assert_eq!(code, 0, "{stderr}");
     let doc: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(doc["files"][0]["channels"], "RGBI");
+    assert_eq!(doc["files"][0]["channels"], "Gray");
     assert_eq!(doc["files"][0]["bits"], 16);
+    assert_eq!(names(&out.join("hwtest")), vec!["hwtest-001.tif"]);
 }
 
-/// Needs a film strip with at least 2 frames loaded. MOVES THE FILM two frames.
+/// Needs an FP4 strip with at least 2 frames loaded. MOVES THE FILM two frames.
 #[test]
 #[ignore]
 fn roll_two_frames() {
@@ -103,6 +131,8 @@ fn roll_two_frames() {
         "roll",
         "--roll",
         "hwtest",
+        "--film",
+        "fp4",
         "--preset",
         "web",
         "--frames",
@@ -113,4 +143,9 @@ fn roll_two_frames() {
     assert_eq!(code, 0, "{stderr}");
     let doc: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(doc["files"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        names(&out.join("hwtest")).len(),
+        2,
+        "1 file per frame, nothing else"
+    );
 }

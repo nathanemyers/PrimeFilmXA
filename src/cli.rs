@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
+use crate::film::{DustLevel, FilmStock, parse_film};
 use crate::output::{MAX_FRAME, validate_roll_name};
 use crate::preset::{MAX_DPI, MIN_DPI, Preset};
+use crate::process::ProcessSettings;
 
 // `#[derive(...)]` asks the compiler (or a library) to write code for us. `Debug` makes the
 // type printable with `{:?}`; `Parser` (from clap) generates the argument parser, `--help`
@@ -34,6 +36,10 @@ pub struct Cli {
     #[arg(long, global = true, hide = true)]
     pub sane_backend: Option<String>,
 
+    /// Also save each raw capture in this folder (development: tuning and fixtures)
+    #[arg(long, global = true, hide = true)]
+    pub keep_capture: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -59,6 +65,11 @@ pub enum Command {
         #[command(flatten)]
         quality: QualityArgs,
         #[command(flatten)]
+        process: ProcessArgs,
+        /// Dust removal: off (default), gentle, normal, strong
+        #[arg(long, value_enum)]
+        dust: Option<DustLevel>,
+        #[command(flatten)]
         target: TargetArgs,
     },
     /// Scan every frame of a strip or roll, advancing the film after each, until the end
@@ -72,13 +83,24 @@ pub enum Command {
         /// Stop after this many frames
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         frames: Option<u32>,
+        /// Scan the roll at preview speed (300 dpi, about 12 s a frame), saving 8-bit previews
+        /// in previews/<roll>/ instead of archival scans
+        #[arg(long, conflicts_with_all = ["preset", "resolution", "dust"])]
+        preview: bool,
         #[command(flatten)]
         quality: QualityArgs,
+        #[command(flatten)]
+        process: ProcessArgs,
+        /// Dust removal: off (default), gentle, normal, strong
+        #[arg(long, value_enum)]
+        dust: Option<DustLevel>,
         #[command(flatten)]
         target: TargetArgs,
     },
     /// Quick low-resolution preview of the frame in the scanner (the film does not move)
     Preview {
+        #[command(flatten)]
+        process: ProcessArgs,
         #[command(flatten)]
         target: TargetArgs,
     },
@@ -90,6 +112,50 @@ pub enum Command {
     },
     /// List the quality presets
     Presets,
+    /// List the film stocks
+    Films,
+}
+
+impl Command {
+    /// The `schema_version` of this command's `--json` output: 1 for feature 001's commands,
+    /// 2 for the scanning commands since feature 003 (contracts/scan-output.schema.json).
+    pub fn schema_version(&self) -> u32 {
+        match self {
+            Command::Detect | Command::Capabilities { .. } => 1,
+            _ => 2,
+        }
+    }
+}
+
+/// How to turn the negative into a positive (contracts/cli.md, PROCESS OPTIONS).
+#[derive(Debug, Clone, Default, Args)]
+pub struct ProcessArgs {
+    /// Film in the scanner: bw (default), hp5, fp4
+    #[arg(long, value_parser = parse_film)]
+    pub film: Option<FilmStock>,
+}
+
+impl ProcessArgs {
+    /// The processing settings: the stock's profile, overridden by whatever was given.
+    pub fn settings(&self, dust: Option<DustLevel>) -> ProcessSettings {
+        let defaults = ProcessSettings::from_profile(self.film.unwrap_or(FilmStock::DEFAULT));
+        ProcessSettings {
+            dust: dust.unwrap_or(defaults.dust),
+            ..defaults
+        }
+    }
+
+    /// The options given, as command-line words, for resume commands.
+    pub fn flags(&self, dust: Option<DustLevel>) -> Vec<String> {
+        let mut flags = Vec::new();
+        if let Some(film) = self.film {
+            flags.extend(["--film".to_string(), film.value().to_string()]);
+        }
+        if let Some(level) = dust {
+            flags.extend(["--dust".to_string(), level.name().to_string()]);
+        }
+        flags
+    }
 }
 
 // `#[derive(Args)]` makes a reusable group of options; `#[command(flatten)]` above splices it

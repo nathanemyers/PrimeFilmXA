@@ -124,10 +124,13 @@ pub fn preview_stem(root: &Path) -> Result<(PathBuf, String), ScanError> {
     Ok((dir, stem))
 }
 
-/// `base`, or `base-2`, `base-3`, … : the first stem with neither a `.tif` nor a `.json`.
+/// `base`, or `base-2`, `base-3`, … : the first stem with none of the files a frame can
+/// have: `.tif`, and the `-density.tif`, `.json` and `.jpg` files earlier versions wrote.
 fn free_stem(dir: &Path, base: &str) -> String {
     let taken = |stem: &str| {
-        dir.join(format!("{stem}.tif")).exists() || dir.join(format!("{stem}.json")).exists()
+        [".tif", "-density.tif", ".jpg", ".json"]
+            .iter()
+            .any(|ending| dir.join(format!("{stem}{ending}")).exists())
     };
     if !taken(base) {
         return base.to_string();
@@ -224,17 +227,6 @@ impl Drop for PartialFile {
     }
 }
 
-/// Publish a scan's settings record first, then its image, so an image never exists without
-/// the record of how it was made. Returns (image path, settings path).
-pub fn publish_scan(
-    sidecar: (PartialFile, File),
-    image: (PartialFile, File),
-) -> Result<(PathBuf, PathBuf), ScanError> {
-    let settings = sidecar.0.publish(sidecar.1)?;
-    let tiff = image.0.publish(image.1)?;
-    Ok((tiff, settings))
-}
-
 fn io_error(path: &Path, err: &io::Error) -> ScanError {
     ScanError::OutputError {
         path: path.display().to_string(),
@@ -309,6 +301,9 @@ mod tests {
         assert_eq!(roll.scan_stem(3), "r-003-2");
         touch(&roll.dir().join("r-003-2.json"), "");
         assert_eq!(roll.scan_stem(3), "r-003-3");
+        // A density positive alone also takes the name.
+        touch(&roll.dir().join("r-003-3-density.tif"), "");
+        assert_eq!(roll.scan_stem(3), "r-003-4");
     }
 
     #[test]
@@ -345,16 +340,6 @@ mod tests {
             file.write_all(b"half").unwrap();
         }
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn scan_publishes_sidecar_and_image() {
-        let dir = temp_dir("scan");
-        let sidecar = PartialFile::create(&dir, "r-001.json").unwrap();
-        let image = PartialFile::create(&dir, "r-001.tif").unwrap();
-        let (tiff, json) = publish_scan(sidecar, image).unwrap();
-        assert!(tiff.ends_with("r-001.tif") && tiff.exists());
-        assert!(json.ends_with("r-001.json") && json.exists());
     }
 
     #[test]

@@ -3,3 +3,8 @@
 
 # Per-user Claude Code settings
 .claude/settings.local.json
+
+# Editor and backup files
+*.rs.bk
+.idea/
+.vscode/

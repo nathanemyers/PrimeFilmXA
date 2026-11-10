@@ -23,7 +23,7 @@ fn main() -> ExitCode {
             // By now the scanner and SANE have been released: they were dropped when `run`
             // returned. Scanning commands have already printed their report.
             if !failure.reported {
-                report::print_error(&failure.error, cli.json);
+                report::print_error(&failure.error, cli.json, cli.command.schema_version());
             }
             ExitCode::from(failure.error.exit_code())
         }
